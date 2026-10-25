@@ -610,12 +610,12 @@ class GameView(context: Context) : View(context) {
         c.bornAt = nowMs
         c.stateAt = nowMs
         c.retreatAt = 0L
+        // 只有三档：银(1下) / 蓝(2下) / 绿(3下)
         val roll = Random.nextFloat()
         c.basinColor = when {
             roll < 0.50f -> 0
-            roll < 0.75f -> 1
-            roll < 0.90f -> 2
-            else -> 3
+            roll < 0.80f -> 1
+            else -> 2
         }
         c.basinHp = c.basinColor + 1
         c.face = 0
