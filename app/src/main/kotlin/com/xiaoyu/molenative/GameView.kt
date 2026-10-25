@@ -1,6 +1,8 @@
 package com.xiaoyu.molenative
 
+import android.app.Activity
 import android.content.Context
+import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Canvas
@@ -13,21 +15,23 @@ import android.graphics.RadialGradient
 import android.graphics.RectF
 import android.graphics.Shader
 import android.graphics.Typeface
-import android.media.AudioManager
-import android.media.ToneGenerator
+import android.net.Uri
 import android.os.Build
 import android.os.VibrationEffect
 import android.os.Vibrator
+import android.provider.OpenableColumns
 import android.view.MotionEvent
 import android.view.View
 import kotlin.math.max
 import kotlin.math.min
+import kotlin.math.roundToInt
 import kotlin.math.sin
 import kotlin.random.Random
 
 class GameView(context: Context) : View(context) {
 
     private val ctx: Context = context
+    private val audio = GameAudio(context)
 
     private enum class Phase { READY, PLAYING, OVER }
 
@@ -44,13 +48,14 @@ class GameView(context: Context) : View(context) {
         var lastHitAt = 0L
         var face = 0        // 0开心 1生气 2哭 3晕（锁定）
         var dieAt = 0L      // 被打飞的时间点
+        var dizzySfx = false
         var p = 0f
     }
 
     private class Fx(
         val kind: Int, var x: Float, var y: Float,
         val vx: Float, val vy: Float, val life: Long,
-        val t0: Long, val text: String?, val color: Int, val size: Float
+        var t0: Long, val text: String?, val color: Int, val size: Float
     )
 
     private class FlyBasin(
@@ -155,11 +160,19 @@ class GameView(context: Context) : View(context) {
         )
     }
 
-    private val tone: ToneGenerator? = try {
-        ToneGenerator(AudioManager.STREAM_MUSIC, 55)
-    } catch (e: Throwable) {
-        null
-    }
+    // 设置面板
+    private var showSettings = false
+    private var dragSld = -1
+    private val gearR = RectF()
+    private val panel = RectF()
+    private val sldSfxTrack = RectF()
+    private val sldBgmTrack = RectF()
+    private val sldSfxHit = RectF()
+    private val sldBgmHit = RectF()
+    private val btnPickBgm = RectF()
+    private val btnResetBgm = RectF()
+    private val btnVib = RectF()
+    private val btnCloseSet = RectF()
 
     init {
         best = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getInt("best", 0)
@@ -256,11 +269,31 @@ class GameView(context: Context) : View(context) {
         lastFrame = nowMs
 
         if (phase == Phase.PLAYING) {
-            tick()
-            if (nowMs - startAt >= ROUND_MS) gameOver()
+            if (showSettings) {
+                // 打开设置时把整局游戏的时间戳一起推后 = 暂停
+                val d = dt.toLong()
+                if (d > 0L) {
+                    startAt += d
+                    nextSpawnAt += d
+                    for (c in cells) {
+                        if (!c.active) continue
+                        c.bornAt += d
+                        c.stateAt += d
+                        c.liveUntil += d
+                        if (c.retreatAt != 0L) c.retreatAt += d
+                        if (c.dieAt != 0L) c.dieAt += d
+                        if (c.basinShakeAt != 0L) c.basinShakeAt += d
+                        if (c.lastHitAt != 0L) c.lastHitAt += d
+                    }
+                    for (f in fx) f.t0 += d
+                }
+            } else {
+                tick()
+                if (nowMs - startAt >= ROUND_MS) gameOver()
+            }
         }
         updateFx()
-        updateBasins(dt)
+        if (!showSettings) updateBasins(dt)
 
         canvas.save()
         canvas.translate(0f, insetTop)
@@ -270,6 +303,7 @@ class GameView(context: Context) : View(context) {
         drawFlyBasins(canvas)
         drawHud(canvas)
         if (phase != Phase.PLAYING) drawOverlay(canvas)
+        if (showSettings) drawSettings(canvas)
         canvas.restore()
 
         if (phase != Phase.READY) postInvalidateOnAnimation()
@@ -532,6 +566,210 @@ class GameView(context: Context) : View(context) {
             tmp.set(left, ty, left + (right - left) * ratio, ty + th)
             canvas.drawRoundRect(tmp, th / 2f, th / 2f, pFill)
         }
+
+        // 声音设置入口（右上角）
+        val gs = hudH * 0.17f
+        gearR.set(vw - dp(9f) - gs, hudH * 0.055f, vw - dp(9f), hudH * 0.055f + gs)
+        pFill.color = 0x3DFFFFFF
+        canvas.drawRoundRect(gearR, gs * 0.32f, gs * 0.32f, pFill)
+        val gc = 0xD91E4C6E.toInt()
+        pStroke.color = gc
+        pStroke.strokeWidth = max(dp(1.6f), gs * 0.075f)
+        pFill.color = gc
+        val gx = gearR.centerX()
+        val gy = gearR.centerY()
+        val lw = gs * 0.40f
+        val step = gs * 0.155f
+        for (k in -1..1) {
+            val ly = gy + step * k
+            canvas.drawLine(gx - lw, ly, gx + lw, ly, pStroke)
+        }
+        canvas.drawCircle(gx - lw * 0.50f, gy - step, gs * 0.072f, pFill)
+        canvas.drawCircle(gx + lw * 0.30f, gy, gs * 0.072f, pFill)
+        canvas.drawCircle(gx - lw * 0.05f, gy + step, gs * 0.072f, pFill)
+    }
+
+    // ---------------- 声音设置面板 ----------------
+
+    private fun layoutSettings() {
+        val pw = vw * 0.86f
+        val ph = min(pw * 1.26f, vh * 0.66f)
+        panel.set((vw - pw) / 2f, (vh - ph) / 2f, (vw + pw) / 2f, (vh + ph) / 2f)
+
+        val l = panel.left + pw * 0.07f
+        val r = panel.right - pw * 0.07f
+        val trackL = l + pw * 0.15f
+        val trackR = r - pw * 0.17f
+
+        val y1 = panel.top + ph * 0.24f
+        val y2 = panel.top + ph * 0.35f
+        sldSfxTrack.set(trackL, y1, trackR, y1)
+        sldBgmTrack.set(trackL, y2, trackR, y2)
+        val ht = ph * 0.034f
+        sldSfxHit.set(trackL - ht, y1 - ht * 1.6f, trackR + ht, y1 + ht * 1.6f)
+        sldBgmHit.set(trackL - ht, y2 - ht * 1.6f, trackR + ht, y2 + ht * 1.6f)
+
+        val bh = ph * 0.098f
+        btnPickBgm.set(l, panel.top + ph * 0.455f, r, panel.top + ph * 0.455f + bh)
+        val gap = pw * 0.045f
+        val half = (r - l - gap) / 2f
+        btnResetBgm.set(l, panel.top + ph * 0.655f, l + half, panel.top + ph * 0.655f + bh)
+        btnVib.set(l + half + gap, panel.top + ph * 0.655f, r, panel.top + ph * 0.655f + bh)
+        btnCloseSet.set(l, panel.bottom - ph * 0.145f, r, panel.bottom - ph * 0.045f)
+    }
+
+    private fun drawSettings(canvas: Canvas) {
+        layoutSettings()
+        pFill.shader = null
+        pFill.style = Paint.Style.FILL
+        pFill.color = 0xB3000A14.toInt()
+        canvas.drawRect(0f, -insetTop, vw, vh, pFill)
+
+        pFill.color = 0xF4F6FAFD.toInt()
+        canvas.drawRoundRect(panel, dp(20f), dp(20f), pFill)
+
+        val ph = panel.height()
+        val l = panel.left + panel.width() * 0.07f
+        val r = panel.right - panel.width() * 0.07f
+
+        pText.style = Paint.Style.FILL
+        pText.textAlign = Paint.Align.CENTER
+        pText.textSize = ph * 0.072f
+        pText.color = cInk
+        canvas.drawText("声音设置", panel.centerX(), panel.top + ph * 0.115f, pText)
+
+        val th = ph * 0.021f
+        val knob = ph * 0.029f
+        val labels = arrayOf("音效", "音乐")
+        val tracks = arrayOf(sldSfxTrack, sldBgmTrack)
+        val vols = arrayOf(audio.sfxVol, audio.bgmVol)
+        for (k in 0..1) {
+            val tr = tracks[k]
+            val v = vols[k]
+            pText.textAlign = Paint.Align.LEFT
+            pText.textSize = ph * 0.050f
+            pText.color = cInk
+            canvas.drawText(labels[k], l, tr.centerY() + ph * 0.018f, pText)
+
+            pText.textAlign = Paint.Align.RIGHT
+            pText.textSize = ph * 0.044f
+            pText.color = cInkSoft
+            canvas.drawText("${(v * 100).roundToInt()}%", r, tr.centerY() + ph * 0.016f, pText)
+
+            tmp.set(tr.left, tr.centerY() - th / 2f, tr.right, tr.centerY() + th / 2f)
+            pFill.color = 0x241E4C6E
+            canvas.drawRoundRect(tmp, th / 2f, th / 2f, pFill)
+
+            val kx = tr.left + tr.width() * v
+            if (kx > tr.left + 1f) {
+                tmp.set(tr.left, tr.centerY() - th / 2f, kx, tr.centerY() + th / 2f)
+                pFill.color = cInk
+                canvas.drawRoundRect(tmp, th / 2f, th / 2f, pFill)
+            }
+            pFill.color = Color.WHITE
+            canvas.drawCircle(kx, tr.centerY(), knob, pFill)
+            pStroke.color = cInk
+            pStroke.strokeWidth = max(dp(1.7f), ph * 0.007f)
+            canvas.drawCircle(kx, tr.centerY(), knob, pStroke)
+        }
+
+        button(canvas, btnPickBgm, "更换背景音乐", false)
+        pText.textAlign = Paint.Align.CENTER
+        pText.textSize = ph * 0.040f
+        pText.color = cInkSoft
+        val nm = audio.bgmName
+        canvas.drawText("当前：" + if (nm.length > 18) nm.substring(0, 18) + "…" else nm,
+            panel.centerX(), panel.top + ph * 0.615f, pText)
+
+        button(canvas, btnResetBgm, "恢复内置", !audio.bgmCustom)
+        button(canvas, btnVib, if (audio.vibOn) "震动 开" else "震动 关", audio.vibOn)
+        button(canvas, btnCloseSet, "完成", true)
+    }
+
+    private fun button(canvas: Canvas, rect: RectF, label: String, solid: Boolean) {
+        pFill.style = Paint.Style.FILL
+        pFill.color = if (solid) cInk else 0x181E4C6E
+        canvas.drawRoundRect(rect, rect.height() * 0.32f, rect.height() * 0.32f, pFill)
+        pText.textAlign = Paint.Align.CENTER
+        pText.style = Paint.Style.FILL
+        pText.textSize = rect.height() * 0.40f
+        pText.color = if (solid) Color.WHITE else cInk
+        canvas.drawText(label, rect.centerX(), rect.centerY() + pText.textSize * 0.35f, pText)
+    }
+
+    private fun touchSettings(e: MotionEvent, x: Float, y: Float) {
+        when (e.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                when {
+                    sldSfxHit.contains(x, y) -> {
+                        dragSld = 0
+                        setSld(0, x)
+                    }
+                    sldBgmHit.contains(x, y) -> {
+                        dragSld = 1
+                        setSld(1, x)
+                    }
+                    btnPickBgm.contains(x, y) -> {
+                        dragSld = -1
+                        pickBgm()
+                    }
+                    btnResetBgm.contains(x, y) -> {
+                        dragSld = -1
+                        audio.clearBgm()
+                        audio.startBgm()
+                    }
+                    btnVib.contains(x, y) -> {
+                        dragSld = -1
+                        audio.vibOn = !audio.vibOn
+                        audio.saveVib()
+                        if (audio.vibOn) buzz(20)
+                    }
+                    btnCloseSet.contains(x, y) -> closeSettings()
+                    !panel.contains(x, y) -> closeSettings()
+                    else -> dragSld = -1
+                }
+                invalidate()
+            }
+            MotionEvent.ACTION_MOVE -> {
+                if (dragSld >= 0) {
+                    setSld(dragSld, x)
+                    invalidate()
+                }
+            }
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                if (dragSld == 0) audio.play(GameAudio.HIT2, 1f, 0.75f)
+                if (dragSld == 1) audio.startBgm()
+                if (dragSld >= 0) audio.saveVolumes()
+                dragSld = -1
+                invalidate()
+            }
+        }
+    }
+
+    private fun setSld(which: Int, x: Float) {
+        val t = if (which == 0) sldSfxTrack else sldBgmTrack
+        val v = ((x - t.left) / max(1f, t.width())).coerceIn(0f, 1f)
+        if (which == 0) audio.sfxVol = v else audio.bgmVol = v
+    }
+
+    private fun closeSettings() {
+        showSettings = false
+        dragSld = -1
+        audio.saveVolumes()
+        lastFrame = 0L
+    }
+
+    private fun pickBgm() {
+        val act = ctx as? Activity ?: return
+        try {
+            val i = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+                addCategory(Intent.CATEGORY_OPENABLE)
+                type = "*/*"
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
+            }
+            act.startActivityForResult(i, MainActivity.REQ_BGM)
+        } catch (t: Throwable) {
+        }
     }
 
     private fun drawOverlay(canvas: Canvas) {
@@ -618,6 +856,10 @@ class GameView(context: Context) : View(context) {
                 c.retreatAt = 0L
                 c.state = 0
                 c.dieAt = 0L
+                c.dizzySfx = false
+            } else if (c.state == 3 && !c.dizzySfx && nowMs - c.dieAt >= DEATH_SHOW_MS) {
+                c.dizzySfx = true
+                audio.play(GameAudio.DIZZY, 1f, 0.85f)
             }
         }
 
@@ -665,6 +907,7 @@ class GameView(context: Context) : View(context) {
         }
         c.face = 0
         c.dieAt = 0L
+        c.dizzySfx = false
         c.basinShakeAt = 0L
         c.lastHitAt = 0L
         c.liveUntil = nowMs + (1500L - min(score * 8L, 520L)).coerceAtLeast(900L) + (c.basinHp - 1) * 460L
@@ -691,7 +934,7 @@ class GameView(context: Context) : View(context) {
             fx.add(Fx(0, cx, cy - charH * 0.36f, 0f, 0f, 520L, nowMs, "+$g", Color.rgb(214, 236, 250), charW * 0.20f))
             fx.add(Fx(1, cx, cy - charH * 0.10f, 0f, 0f, 320L, nowMs, null, 0, 0f))
             buzz(12)
-            beep(760)
+            audio.play(if (c.basinHp >= 2) GameAudio.HIT1 else GameAudio.HIT2)
             return
         }
 
@@ -732,8 +975,9 @@ class GameView(context: Context) : View(context) {
         c.stateAt = nowMs
         c.dieAt = nowMs
         c.liveUntil = nowMs + DEATH_SHOW_MS + DEATH_DIZZY_MS
-        beep(1600)
         buzz(26)
+        audio.play(GameAudio.HIT3)
+        audio.play(GameAudio.KNOCK, 1f, 0.75f)
     }
 
     // 命中一次：基础分（银1/蓝3/绿5）+ 连击加成（每满3连 +1，封顶 +3）
@@ -746,6 +990,7 @@ class GameView(context: Context) : View(context) {
         }
         val g = base + min(combo / 3, 3)
         score += g
+        if (combo % 3 == 0) audio.play(GameAudio.COMBO, 1f, 0.5f)
         return g
     }
 
@@ -756,6 +1001,7 @@ class GameView(context: Context) : View(context) {
             fx.add(Fx(0, x, y, 0f, 0f, 460L, nowMs, "-1", Color.rgb(255, 120, 120), charW * 0.20f))
         }
         fx.add(Fx(1, x, y, 0f, 0f, 300L, nowMs, null, 0, 0f))
+        audio.play(GameAudio.MISS, 0.85f, 0.9f)
         buzz(8)
     }
 
@@ -782,9 +1028,22 @@ class GameView(context: Context) : View(context) {
     }
 
     override fun onTouchEvent(e: MotionEvent): Boolean {
-        if (e.action != MotionEvent.ACTION_DOWN) return true
         val x = e.x
         val y = e.y - insetTop
+
+        if (showSettings) {
+            touchSettings(e, x, y)
+            return true
+        }
+
+        if (e.action != MotionEvent.ACTION_DOWN) return true
+
+        if (gearR.contains(x, y)) {
+            showSettings = true
+            dragSld = -1
+            invalidate()
+            return true
+        }
 
         if (phase != Phase.PLAYING) {
             if (btnRect.contains(x, y)) start()
@@ -819,8 +1078,11 @@ class GameView(context: Context) : View(context) {
             c.p = 0f
             c.state = 0
             c.retreatAt = 0L
+            c.dizzySfx = false
         }
         phase = Phase.PLAYING
+        audio.play(GameAudio.START, 1f, 0.9f)
+        audio.startBgm()
         startAt = System.currentTimeMillis()
         nowMs = startAt
         nextSpawnAt = startAt + 300L
@@ -832,6 +1094,7 @@ class GameView(context: Context) : View(context) {
         phase = Phase.OVER
         for (c in cells) if (c.active) c.retreatAt = nowMs
         combo = 0
+        audio.play(GameAudio.OVER, 1f, 0.9f)
         if (score > best) {
             best = score
             ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putInt("best", best).apply()
@@ -839,20 +1102,8 @@ class GameView(context: Context) : View(context) {
         postInvalidateOnAnimation()
     }
 
-    private fun beep(tag: Int) {
-        try {
-            tone?.startTone(
-                when {
-                    tag < 950 -> ToneGenerator.TONE_PROP_BEEP
-                    tag < 1200 -> ToneGenerator.TONE_PROP_BEEP2
-                    else -> ToneGenerator.TONE_PROP_ACK
-                }, 60
-            )
-        } catch (t: Throwable) {
-        }
-    }
-
     private fun buzz(ms: Int) {
+        if (!audio.vibOn) return
         try {
             val v = ctx.getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator ?: return
             if (!v.hasVibrator()) return
@@ -868,6 +1119,33 @@ class GameView(context: Context) : View(context) {
 
     override fun onDetachedFromWindow() {
         super.onDetachedFromWindow()
-        try { tone?.release() } catch (t: Throwable) { }
+        try { audio.release() } catch (t: Throwable) { }
+    }
+
+    // 由 MainActivity 在 onResume / onPause 调用
+    fun onResumeAudio() {
+        try { audio.startBgm() } catch (t: Throwable) { }
+    }
+
+    fun onPauseAudio() {
+        try { audio.pauseBgm() } catch (t: Throwable) { }
+    }
+
+    // 用户在系统选择器里挑好本地音乐
+    fun onPickedBgm(uri: Uri) {
+        try {
+            ctx.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        } catch (t: Throwable) {
+        }
+        var name: String? = null
+        try {
+            ctx.contentResolver.query(uri, null, null, null, null)?.use { c ->
+                val idx = c.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                if (idx >= 0 && c.moveToFirst()) name = c.getString(idx)
+            }
+        } catch (t: Throwable) {
+        }
+        audio.setBgm(uri, name)
+        invalidate()
     }
 }
