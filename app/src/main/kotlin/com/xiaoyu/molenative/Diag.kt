@@ -39,6 +39,7 @@ object Diag {
     private val head = LinkedHashMap<String, String>()
     private val runMap = LinkedHashMap<String, String>()
     private val tail = ArrayList<String>()
+    private var prevCrash = ""
 
     // 帧率（按 1 秒窗口统计）
     private var fWinStart = 0L
@@ -66,8 +67,9 @@ object Diag {
                 val sp = c.getSharedPreferences(PRE, Context.MODE_PRIVATE)
                 val lc = sp.getString("lastCrash", "") ?: ""
                 if (lc.isNotEmpty()) {
-                    line("CRASH-PREV", lc)
+                    prevCrash = lc
                     sp.edit().putString("lastCrash", "").commit()
+                    copy(c, "上次崩溃\n" + lc)
                 }
             } catch (t: Throwable) {
             }
@@ -184,6 +186,9 @@ object Diag {
             sb.append(if (fWin > 0) (fSum / fWin).toString() else "-")
             sb.append(" min=").append(if (fMin > 0) fMin.toString() else "-")
             sb.append('\n')
+            if (prevCrash.isNotEmpty()) {
+                sb.append("prevCrash:\n").append(prevCrash.take(4000)).append('\n')
+            }
             if (tail.isNotEmpty()) {
                 sb.append("evt:")
                 for (s in tail) sb.append("\n  ").append(s)
