@@ -43,7 +43,7 @@ class GameView(context: Context) : View(context) {
         var basinShakeAt = 0L
         var lastHitAt = 0L
         var face = 0        // 0开心 1生气 2哭 3晕（锁定）
-        var reward = 0      // 这个角色总共还能给多少分
+        var dieAt = 0L      // 被打飞的时间点
         var p = 0f
     }
 
@@ -61,7 +61,11 @@ class GameView(context: Context) : View(context) {
     companion object {
         private const val COLS = 3
         private const val ROWS = 3
-        private const val HIT_SCORE = 10        // 每敲一下固定分
+        private const val SCORE_SILVER = 1      // 银盆基础分
+        private const val SCORE_BLUE = 3        // 蓝盆基础分
+        private const val SCORE_GREEN = 5       // 绿盆基础分
+        private const val DEATH_SHOW_MS = 340L  // 盆飞走后先露出原表情
+        private const val DEATH_DIZZY_MS = 620L // 晕 + 左右晃两下
         private const val NC = COLS * ROWS
         private const val ROUND_MS = 30_000L
         private const val PREFS = "mole"
@@ -191,9 +195,9 @@ class GameView(context: Context) : View(context) {
         val avail = vh - gTop - vh * 0.02f
         cellH = min(avail / ROWS, cellW * 1.38f)
         gridTop = gTop + (avail - cellH * ROWS) / 2f
-        rx = cellW * 0.45f
+        rx = cellW * 0.47f
         ry = cellW * 0.17f
-        charW = cellW * 0.94f
+        charW = cellW * 0.90f
         charH = charW * bmpHappy.height / bmpHappy.width
         cutOff = ry * 0.05f
 
@@ -346,17 +350,45 @@ class GameView(context: Context) : View(context) {
             val c = cells[i]
             if (c.active && c.p > 0.005f) drawMole(canvas, i, c)
         }
+        // 水面前沿：盖住人物的下半身，免得身体被直线切断、和洞口阴影叠得怪
+        for (i in 0 until NC) {
+            val cx = holeX(i)
+            val cy = holeY(i)
+            canvas.save()
+            clipPath.reset()
+            clipPath.addOval(cx - rx, cy - ry, cx + rx, cy + ry, Path.Direction.CW)
+            canvas.clipPath(clipPath)
+            canvas.clipRect(cx - rx, cy, cx + rx, cy + ry + dp(2f))
+            pFill.color = cPool
+            canvas.drawOval(cx - rx, cy - ry, cx + rx, cy + ry, pFill)
+            pFill.color = 0x40CFEFFF
+            tmp.set(cx - rx * 0.92f, cy + ry * 0.10f, cx + rx * 0.92f, cy + ry * 0.92f)
+            canvas.drawOval(tmp, pFill)
+            pStroke.style = Paint.Style.STROKE
+            pStroke.color = 0x99CFF0FF.toInt()
+            pStroke.strokeWidth = dp(2.5f)
+            canvas.drawOval(cx - rx + dp(1f), cy - ry + dp(1f), cx + rx - dp(1f), cy + ry - dp(1f), pStroke)
+            pStroke.style = Paint.Style.FILL
+            canvas.restore()
+        }
     }
 
     private fun drawMole(canvas: Canvas, i: Int, c: Cell) {
         val cx = holeX(i)
         val cut = cutY(i)
-        val bmp = faces[c.face.coerceIn(0, 3)]
+        // 死亡三段：先露原表情 -> 到点才换晕并左右晃两下 -> 下沉
+        val e = if (c.state == 3) nowMs - c.dieAt else 0L
+        val dizzy = c.state == 3 && e >= DEATH_SHOW_MS
+        val bmp = faces[if (dizzy) 3 else c.face.coerceIn(0, 2)]
         val w = charW
         val h = w * bmp.height / bmp.width
         val topY = cut - h * (HEAD_LIFT + HEAD_C) + (1f - c.p) * h * RISE_TRAVEL
 
         canvas.save()
+        if (dizzy) {
+            val k = ((e - DEATH_SHOW_MS).toFloat() / DEATH_DIZZY_MS).coerceIn(0f, 1f)
+            canvas.rotate(sin(k * 12.566f) * 7f, cx, cut - h * 0.30f)
+        }
         clipPath.reset()
         clipPath.addRect(cx - w, 0f, cx + w, cut, Path.Direction.CW)
         canvas.clipPath(clipPath)
@@ -460,6 +492,14 @@ class GameView(context: Context) : View(context) {
         pText.textSize = hudH * 0.17f
         pText.color = cInkSoft
         canvas.drawText("最高 $best", vw * 0.5f, hudH * 0.33f, pText)
+
+        // 连击
+        if (phase == Phase.PLAYING && combo >= 3) {
+            pText.textAlign = Paint.Align.CENTER
+            pText.textSize = hudH * 0.21f
+            pText.color = cGold
+            canvas.drawText("连击 ×$combo", vw * 0.5f, hudH * 0.62f, pText)
+        }
 
         // 倒计时
         pText.textAlign = Paint.Align.RIGHT
@@ -577,6 +617,7 @@ class GameView(context: Context) : View(context) {
                 c.p = 0f
                 c.retreatAt = 0L
                 c.state = 0
+                c.dieAt = 0L
             }
         }
 
@@ -617,9 +658,13 @@ class GameView(context: Context) : View(context) {
             roll < 0.80f -> 1
             else -> 2
         }
-        c.basinHp = c.basinColor + 1
+        c.basinHp = when (c.basinColor) {
+            1 -> 3      // 蓝：敲 3 下
+            2 -> 2      // 绿：敲 2 下
+            else -> 1   // 银：敲 1 下
+        }
         c.face = 0
-        c.reward = HIT_SCORE * c.basinHp
+        c.dieAt = 0L
         c.basinShakeAt = 0L
         c.lastHitAt = 0L
         c.liveUntil = nowMs + (1500L - min(score * 8L, 520L)).coerceAtLeast(900L) + (c.basinHp - 1) * 460L
@@ -638,18 +683,19 @@ class GameView(context: Context) : View(context) {
         // 铁盆还有血：砸一下不掉，表情凶一层
         if (c.basinHp > 1) {
             c.basinHp -= 1
-            c.face = min(c.face + 1, 3)
+            c.face = min(c.face + 1, 2)
             c.basinShakeAt = nowMs
             c.lastHitAt = nowMs
             c.liveUntil = max(c.liveUntil, nowMs + 520L)
-            award(c, cx, cy - charH * 0.36f, Color.rgb(214, 236, 250))
+            val g = gain(c)
+            fx.add(Fx(0, cx, cy - charH * 0.36f, 0f, 0f, 520L, nowMs, "+$g", Color.rgb(214, 236, 250), charW * 0.20f))
             fx.add(Fx(1, cx, cy - charH * 0.10f, 0f, 0f, 320L, nowMs, null, 0, 0f))
             buzz(12)
             beep(760)
             return
         }
 
-        // 最后一下：盆被打飞，人物当场晕住，很快沉下去
+        // 最后一下：盆被打飞
         val bw = charW * 0.78f
         val bh = bw * bmpBasins[c.basinColor].height / bmpBasins[c.basinColor].width
         val baseTop = cutY(i) - charH * (HEAD_LIFT + HEAD_C) + (1f - c.p) * charH * RISE_TRAVEL
@@ -676,29 +722,40 @@ class GameView(context: Context) : View(context) {
             )
         }
 
+        val g = gain(c)
+        fx.add(Fx(0, cx, cy - charH * 0.30f, 0f, 0f, 700L, nowMs, "+$g", Color.rgb(255, 214, 102), charW * 0.26f))
+        fx.add(Fx(1, cx, cy, 0f, 0f, 380L, nowMs, null, 0, 0f))
+
+        // 死亡三段：先露原表情 -> 晕+晃两下 -> 沉下去
         c.basinHp = 0
-        c.face = 3
         c.state = 3
         c.stateAt = nowMs
-        c.liveUntil = nowMs + 300L
-        award(c, cx, cy - charH * 0.30f, Color.rgb(255, 214, 102))
+        c.dieAt = nowMs
+        c.liveUntil = nowMs + DEATH_SHOW_MS + DEATH_DIZZY_MS
         beep(1600)
         buzz(26)
     }
 
-    // 每个角色总共只有一笔固定分，敲几下都在这笔里分，敲完就是 0
-    private fun award(c: Cell, cx: Float, cy: Float, color: Int) {
-        val g = min(HIT_SCORE, c.reward)
-        if (g <= 0) return
-        c.reward -= g
-        score += g
+    // 命中一次：基础分（银1/蓝3/绿5）+ 连击加成（每满3连 +1，封顶 +3）
+    private fun gain(c: Cell): Int {
         combo += 1
-        fx.add(Fx(0, cx, cy, 0f, 0f, 620L, nowMs, "+$g", color, charW * 0.24f))
-        fx.add(Fx(1, cx, cy, 0f, 0f, 380L, nowMs, null, 0, 0f))
+        val base = when (c.basinColor) {
+            1 -> SCORE_BLUE
+            2 -> SCORE_GREEN
+            else -> SCORE_SILVER
+        }
+        val g = base + min(combo / 3, 3)
+        score += g
+        return g
     }
 
-    private fun miss() {
+    private fun miss(x: Float, y: Float) {
         combo = 0
+        if (score > 0) {
+            score -= 1
+            fx.add(Fx(0, x, y, 0f, 0f, 460L, nowMs, "-1", Color.rgb(255, 120, 120), charW * 0.20f))
+        }
+        fx.add(Fx(1, x, y, 0f, 0f, 300L, nowMs, null, 0, 0f))
         buzz(8)
     }
 
@@ -748,7 +805,7 @@ class GameView(context: Context) : View(context) {
             if (d < bestD) { bestD = d; bestIdx = i }
         }
 
-        if (bestIdx >= 0) hit(bestIdx) else miss()
+        if (bestIdx >= 0) hit(bestIdx) else miss(x, y)
         return true
     }
 
