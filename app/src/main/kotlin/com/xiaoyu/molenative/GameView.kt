@@ -297,7 +297,7 @@ class GameView(context: Context) : View(context) {
 
         canvas.save()
         clipPath.reset()
-        clipPath.addRect(cx - w, 0f, cx + w, cut)
+        clipPath.addRect(cx - w, 0f, cx + w, cut, Path.Direction.CW)
         canvas.clipPath(clipPath)
         tmp2.set(cx - w / 2f, topY, cx + w / 2f, topY + h)
         canvas.drawBitmap(bmp, null, tmp2, pImg)
