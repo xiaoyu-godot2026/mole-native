@@ -489,6 +489,24 @@ class GameView(context: Context) : View(context) {
         }
         canvas.restore()
 
+        // 多拍盆在盆沿标剩余敲击次数（绿盆 2 下、蓝盆 3 下，敲一下减一）
+        if (c.state == 0 && c.basinHp > 1) {
+            val bb = bmpBasins[c.basinColor]
+            val bw = w * 0.78f
+            val bh = bw * bb.height / bb.width
+            val by = topY + h * 0.37f
+            val r = w * 0.115f
+            val bx2 = cx + bw * 0.40f
+            val by2 = by - bh * 0.90f
+            pFill.color = if (c.basinColor == 1) 0xFF2F6FD0.toInt() else 0xFF2E9E52.toInt()
+            canvas.drawCircle(bx2, by2, r, pFill)
+            pText.textAlign = Paint.Align.CENTER
+            pText.style = Paint.Style.FILL
+            pText.textSize = r * 1.30f
+            pText.color = Color.WHITE
+            canvas.drawText(c.basinHp.toString(), bx2, by2 + r * 0.45f, pText)
+        }
+
         pFill.color = 0x55DCF4FF
         canvas.drawOval(cx - w * 0.44f, cut - ry * 0.10f, cx + w * 0.44f, cut + ry * 0.16f, pFill)
     }
@@ -864,7 +882,9 @@ class GameView(context: Context) : View(context) {
         dragSld = -1
         audio.saveVolumes()
         saveOffset()
+        if (mode == Mode.RHYTHM && phase == Phase.PLAYING) audio.rebaseClock()
         bgmPolicy()
+        if (phase == Phase.PLAYING && mode == Mode.RHYTHM) resyncRhythmClock()
         lastFrame = 0L
     }
 
@@ -1000,6 +1020,10 @@ class GameView(context: Context) : View(context) {
             pText.textSize = btnRect2.height() * 0.21f
             pText.color = cInkSoft
             canvas.drawText("30 秒随便敲，没有音乐", btnRect2.centerX(), btnRect2.centerY() + btnRect2.height() * 0.27f, pText)
+
+            pText.textSize = pw * 0.034f
+            pText.color = cInkSoft
+            canvas.drawText("银盆敲 1 下 · 绿盆连敲 2 下 · 蓝盆连敲 3 下", vw * 0.5f, pt + ph * 0.775f, pText)
 
             pText.textSize = pw * 0.040f
             pText.color = cInkSoft
@@ -1606,11 +1630,19 @@ class GameView(context: Context) : View(context) {
     }
 
     private fun songPos(): Long {
-        val raw = if (audio.bgmPlaying) audio.positionMs() else (System.currentTimeMillis() - gameStartAt)
+        val raw = songPosRaw()
         if (raw < lastSongPos) return lastSongPos
+        if (lastSongPos > 0 && raw - lastSongPos > 700L) {
+            // 时钟跳了一大截（切后台等）：把过期音符划掉，别让它们同一帧全冒出来
+            Diag.line("jump", (raw - lastSongPos).toString())
+            while (nextBeat < chart.size && chart[nextBeat].t + W_GOOD < raw) nextBeat++
+        }
         lastSongPos = raw
         return raw
     }
+
+    private fun songPosRaw(): Long =
+        if (audio.bgmPlaying) audio.positionMs() else (System.currentTimeMillis() - gameStartAt)
 
     private fun ensureMap() {
         if (map != null || analyzing) return
@@ -1769,12 +1801,31 @@ class GameView(context: Context) : View(context) {
         paused = false
         lastFrame = 0L
         if (phase == Phase.PLAYING && mode == Mode.RHYTHM) {
-            // 音乐恢复前 songPos() 会退回墙钟，先把墙钟基准挪到暂停点，避免时钟跳一大截
-            gameStartAt = System.currentTimeMillis() - nowMs
             audio.resumeBgm()
-            audio.rebaseClock()
+            resyncRhythmClock()
         }
         postInvalidateOnAnimation()
+    }
+
+    /** 暂停/设置/切后台回来：时钟重新对齐音乐真实进度，已过期的音符直接跳过，不补冒 */
+    private fun resyncRhythmClock() {
+        if (mode != Mode.RHYTHM || phase != Phase.PLAYING) return
+        audio.rebaseClock()
+        // 音乐没就绪时不能拿墙钟当基准（墙钟在暂停期间还在走），退回冻结的那一帧
+        val pos = if (audio.bgmReady) audio.positionMs() else nowMs
+        if (pos <= 0L) return
+        if (lastSongPos > 0 && abs(pos - lastSongPos) > 200L) {
+            Diag.line("resync", lastSongPos.toString() + "->" + pos)
+        }
+        lastSongPos = pos
+        nowMs = pos
+        gameStartAt = System.currentTimeMillis() - pos
+        var lost = 0
+        while (nextBeat < chart.size && chart[nextBeat].t + W_GOOD < pos) {
+            nextBeat++
+            lost++
+        }
+        if (lost > 0) Diag.line("skipnotes", lost.toString())
     }
 
     /** 放弃本局回主界面：不计分、不写最高分、不写诊断 */
@@ -1846,7 +1897,11 @@ class GameView(context: Context) : View(context) {
     fun onResumeAudio() {
         try {
             if (paused) audio.pauseBgm()
-            else if (phase == Phase.READY) audio.startBgm() else bgmPolicy()
+            else if (phase == Phase.READY) audio.startBgm()
+            else {
+                bgmPolicy()
+                if (phase == Phase.PLAYING && mode == Mode.RHYTHM) resyncRhythmClock()
+            }
         } catch (t: Throwable) {
         }
     }
