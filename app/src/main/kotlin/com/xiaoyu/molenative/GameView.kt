@@ -204,6 +204,7 @@ class GameView(context: Context) : View(context) {
     private val btnPickBgm = RectF()
     private val btnResetBgm = RectF()
     private val btnVib = RectF()
+    private val btnMusic = RectF()
     private val btnCloseSet = RectF()
     private val sldOffTrack = RectF()
     private val sldOffHit = RectF()
@@ -651,10 +652,12 @@ class GameView(context: Context) : View(context) {
 
         val bh = ph * 0.108f
         btnPickBgm.set(l, panel.top + ph * 0.535f, r, panel.top + ph * 0.535f + bh)
-        val gap = pw * 0.045f
-        val half = (r - l - gap) / 2f
-        btnResetBgm.set(l, panel.top + ph * 0.725f, l + half, panel.top + ph * 0.725f + bh)
-        btnVib.set(l + half + gap, panel.top + ph * 0.725f, r, panel.top + ph * 0.725f + bh)
+        val gap = pw * 0.04f
+        val third = (r - l - gap * 2f) / 3f
+        val by = panel.top + ph * 0.725f
+        btnResetBgm.set(l, by, l + third, by + bh)
+        btnVib.set(l + third + gap, by, l + third * 2f + gap, by + bh)
+        btnMusic.set(l + (third + gap) * 2f, by, r, by + bh)
         btnCloseSet.set(l, panel.bottom - ph * 0.135f, r, panel.bottom - ph * 0.045f)
     }
 
@@ -727,18 +730,19 @@ class GameView(context: Context) : View(context) {
         pText.textSize = ph * 0.030f
         canvas.drawText("判定偏移：敲早了往正调，敲晚了往负调", panel.centerX(), panel.top + ph * 0.468f, pText)
 
-        button(canvas, btnResetBgm, "恢复内置", !audio.bgmCustom)
-        button(canvas, btnVib, if (audio.vibOn) "震动 开" else "震动 关", audio.vibOn)
+        button(canvas, btnResetBgm, "内置", !audio.bgmCustom, 0.40f)
+        button(canvas, btnVib, if (audio.vibOn) "震动 开" else "震动 关", audio.vibOn, 0.36f)
+        button(canvas, btnMusic, if (audio.musicOn) "音乐 开" else "音乐 关", audio.musicOn, 0.36f)
         button(canvas, btnCloseSet, "完成", true)
     }
 
-    private fun button(canvas: Canvas, rect: RectF, label: String, solid: Boolean) {
+    private fun button(canvas: Canvas, rect: RectF, label: String, solid: Boolean, ts: Float = 0.46f) {
         pFill.style = Paint.Style.FILL
         pFill.color = if (solid) cInk else 0x181E4C6E
         canvas.drawRoundRect(rect, rect.height() * 0.32f, rect.height() * 0.32f, pFill)
         pText.textAlign = Paint.Align.CENTER
         pText.style = Paint.Style.FILL
-        pText.textSize = rect.height() * 0.46f
+        pText.textSize = rect.height() * ts
         pText.color = if (solid) Color.WHITE else cInk
         canvas.drawText(label, rect.centerX(), rect.centerY() + pText.textSize * 0.35f, pText)
     }
@@ -774,6 +778,17 @@ class GameView(context: Context) : View(context) {
                         audio.saveVib()
                         if (audio.vibOn) buzz(20)
                     }
+                    btnMusic.contains(x, y) -> {
+                        dragSld = -1
+                        audio.musicOn = !audio.musicOn
+                        if (phase == Phase.PLAYING && mode == Mode.RHYTHM) {
+                            // 音游里曲子是游戏本体，不让开关插手
+                        } else if (audio.musicOn && phase != Phase.OVER) {
+                            audio.startBgm()
+                        } else {
+                            audio.pauseBgm()
+                        }
+                    }
                     btnCloseSet.contains(x, y) -> closeSettings()
                     !panel.contains(x, y) -> closeSettings()
                     else -> dragSld = -1
@@ -788,7 +803,6 @@ class GameView(context: Context) : View(context) {
             }
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                 if (dragSld == 0) audio.play(GameAudio.HIT2, 1f, 0.75f)
-                if (dragSld == 1) audio.startBgm()
                 if (dragSld >= 0) audio.saveVolumes()
                 if (dragSld == 2) saveOffset()
                 dragSld = -1
@@ -823,8 +837,19 @@ class GameView(context: Context) : View(context) {
         dragSld = -1
         audio.saveVolumes()
         saveOffset()
-        audio.resumeBgm()
+        bgmPolicy()
         lastFrame = 0L
+    }
+
+    /** 背景音乐策略：开始界面与音游永远有音乐；经典对局看开关；结算静音 */
+    private fun bgmPolicy() {
+        val on = when {
+            phase == Phase.READY -> true
+            phase == Phase.OVER -> false
+            mode == Mode.RHYTHM -> true
+            else -> audio.musicOn
+        }
+        if (on) audio.resumeBgm() else audio.pauseBgm()
     }
 
     private fun pickBgm() {
@@ -1432,7 +1457,8 @@ class GameView(context: Context) : View(context) {
         if (gearR.contains(x, y)) {
             showSettings = true
             dragSld = -1
-            audio.pauseBgm()
+            // 只有音游对局必须暂停（游戏暂停而歌继续会失同步）；其余让音乐继续，方便边拖滑条边听
+            if (phase == Phase.PLAYING && mode == Mode.RHYTHM) audio.pauseBgm()
             invalidate()
             return true
         }
@@ -1592,7 +1618,7 @@ class GameView(context: Context) : View(context) {
             nowMs = startAt
             nextSpawnAt = startAt + 300L
             phase = Phase.PLAYING
-            audio.pauseBgm()
+            bgmPolicy()
         }
         sfx(GameAudio.START, 1f, 0.5f)
         Diag.line("start", if (m0 == Mode.RHYTHM) "rhythm" else "classic")
@@ -1644,6 +1670,7 @@ class GameView(context: Context) : View(context) {
         Diag.run("vol", "sfx" + (audio.sfxVol * 100).roundToInt() + "/bgm" + (audio.bgmVol * 100).roundToInt())
         Diag.run("off", (if (judgeOffset >= 0) "+" else "") + judgeOffset)
         Diag.run("vib", if (audio.vibOn) 1 else 0)
+        Diag.run("music", if (audio.musicOn) 1 else 0)
         Diag.run("mapErr", if (mapErr.isEmpty()) "-" else mapErr)
         Diag.publish(tag)
     }
@@ -1670,7 +1697,10 @@ class GameView(context: Context) : View(context) {
 
     // 由 MainActivity 在 onResume / onPause 调用
     fun onResumeAudio() {
-        try { audio.startBgm() } catch (t: Throwable) { }
+        try {
+            if (phase == Phase.READY) audio.startBgm() else bgmPolicy()
+        } catch (t: Throwable) {
+        }
     }
 
     fun onPauseAudio() {

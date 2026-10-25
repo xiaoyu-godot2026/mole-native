@@ -53,6 +53,20 @@ class GameAudio(private val ctx: Context) {
 
     var vibOn: Boolean = sp.getBoolean("vibOn", true)
 
+    /**
+     * 对局中是否放背景音乐。
+     * 只管**经典模式**：开始界面一直有音乐，音游模式的曲子是游戏本体、不受这个开关影响。
+     * 默认关 = 保持原有手感（经典对局只有音效）。
+     */
+    var musicOn: Boolean = sp.getBoolean("musicOn", false)
+        set(v) {
+            field = v
+            try {
+                sp.edit().putBoolean("musicOn", v).apply()
+            } catch (t: Throwable) {
+            }
+        }
+
     init {
         // v3.2：默认音量下调（音效 20%，音乐 50%），老用户也强制刷一次
         try {
