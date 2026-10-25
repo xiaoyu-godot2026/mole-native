@@ -184,42 +184,64 @@ def thud(dur=0.22):
 
 
 # ---------------- 具体音效 ----------------
+def hit_tick(f0, dec=0.095):
+    """音游用短促敲击：尾巴 120ms 内收干净，快速连打不会糊"""
+    dur = 0.26
+    n = int(SR * dur)
+    out = [0.0] * n
+    partials = [(1.00, 1.00, dec), (2.41, 0.45, dec * 0.55), (4.13, 0.20, dec * 0.30)]
+    for ratio, amp, d in partials:
+        w = 2.0 * math.pi * f0 * ratio / SR
+        k = math.exp(-1.0 / (d * SR))
+        e = 1.0
+        for i in range(n):
+            out[i] += amp * math.sin(w * i) * e
+            e *= k
+    m = min(n, int(0.004 * SR))
+    e = 1.0
+    ke = math.exp(-1.0 / (0.0012 * SR))
+    for i in range(m):
+        out[i] += 0.7 * random.uniform(-1, 1) * e
+        e *= ke
+    return fade(out, 0.001, 0.02)
+
+
 def sfx_all():
     d = {}
 
-    # 铁盆三档：越敲音越高
-    d["sfx_hit1"] = metal(520.0, 0.45)
-    d["sfx_hit2"] = metal(650.0, 0.42)
-    d["sfx_hit3"] = mix(metal(790.0, 0.40), place(silence(0.12), thud(0.2), 0.0, 0.5))
+    # 命中：短促金属「哒」。银盆第 1 拍、连打第 2 拍
+    d["sfx_hit1"] = hit_tick(880.0, 0.095)
+    d["sfx_hit2"] = hit_tick(988.0, 0.095)
+    # 敲碎：金属 + 一点低频冲击
+    d["sfx_hit3"] = mix(hit_tick(740.0, 0.105), thud(0.16), )
 
     # 盆被打飞
-    d["sfx_knock"] = whoosh(0.62)
+    d["sfx_knock"] = whoosh(0.50)
 
-    # 打晕：下滑 + 两下叮
-    dz = chirp(880.0, 240.0, 0.60, dec=0.42, vib=0.045, vibhz=5.0)
-    place(dz, bell(1568.0, 0.25, 0.10, 0.18), 0.02, 0.45)
-    place(dz, bell(2093.0, 0.22, 0.09, 0.15), 0.26, 0.40)
+    # 打晕
+    dz = chirp(820.0, 250.0, 0.50, dec=0.34, vib=0.040, vibhz=5.0)
+    place(dz, bell(1568.0, 0.18, 0.07, 0.15), 0.02, 0.35)
     d["sfx_dizzy"] = dz
 
-    # 漏敲/空点：闷响
-    d["sfx_miss"] = thud(0.20)
+    # 漏敲：闷
+    d["sfx_miss"] = thud(0.16)
 
-    # 连击：上行三连
+    # 连击：上行三连，短
     cb = []
-    for j, f in enumerate([784.0, 988.0, 1319.0]):
-        place(cb, bell(f, 0.20, 0.075, 0.35), j * 0.075, 0.8)
+    for j, f in enumerate([784.0, 1046.0, 1319.0]):
+        place(cb, bell(f, 0.16, 0.055, 0.30), j * 0.062, 0.7)
     d["sfx_combo"] = cb
 
-    # 开局：上行两音
+    # 开局
     st = []
-    place(st, bell(523.0, 0.35, 0.13, 0.35), 0.0, 0.85)
-    place(st, bell(784.0, 0.55, 0.20, 0.40), 0.11, 0.85)
+    place(st, bell(523.0, 0.30, 0.11, 0.30), 0.0, 0.7)
+    place(st, bell(784.0, 0.45, 0.16, 0.35), 0.10, 0.7)
     d["sfx_start"] = st
 
-    # 结束：下行三音
+    # 结束
     ov = []
     for j, f in enumerate([784.0, 587.0, 392.0]):
-        place(ov, bell(f, 0.45, 0.16, 0.30), j * 0.13, 0.8)
+        place(ov, bell(f, 0.40, 0.14, 0.28), j * 0.12, 0.7)
     d["sfx_over"] = ov
 
     return d

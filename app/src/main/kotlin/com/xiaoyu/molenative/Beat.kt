@@ -57,7 +57,7 @@ class BeatMap(
 object BeatDetector {
 
     private const val HOP = 512
-    private const val CACHE = "beat_v1_"
+    private const val CACHE = "beat_v2_"
     private const val MAX_SECONDS = 330
 
     fun cacheKey(uriStr: String?): String = CACHE + (uriStr ?: "builtin")

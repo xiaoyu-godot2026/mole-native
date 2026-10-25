@@ -855,6 +855,11 @@ class GameView(context: Context) : View(context) {
                 pText.color = cRed
                 canvas.drawText(if (analyzing) "正在分析音乐节拍…" else "音乐分析失败：" + mapErr, vw * 0.5f, pt + ph * 0.425f, pText)
             }
+            if (m != null && mapErr.isNotEmpty()) {
+                pText.color = cRed
+                pText.textSize = pw * 0.036f
+                canvas.drawText(mapErr, vw * 0.5f, pt + ph * 0.474f, pText)
+            }
 
             btnRect.set(vw * 0.5f - pw * 0.32f, pt + ph * 0.54f, vw * 0.5f + pw * 0.32f, pt + ph * 0.74f)
             pFill.color = if (map == null) 0xFFBFCBD6.toInt() else cGold
@@ -1058,10 +1063,13 @@ class GameView(context: Context) : View(context) {
             (if (perfect) "Perfect +" else "Good +") + g, col, charW * 0.17f))
         fx.add(Fx(1, holeX(i), cutY(i), 0f, 0f, 300L, nowMs, null, 0, 0f))
 
+        // 判定不同音高不同：Perfect 亮，Good 低半档
+        val rate = if (perfect) 1.0f else 0.84f
         if (c.basinHp > 0) {
-            audio.play(if (c.basinHp >= 2) GameAudio.HIT1 else GameAudio.HIT2)
+            audio.play(if (c.basinHp >= 2) GameAudio.HIT1 else GameAudio.HIT2, rate)
             buzz(9)
         } else {
+            audio.play(GameAudio.HIT3, rate)
             knockOff(i)
         }
     }
@@ -1098,7 +1106,6 @@ class GameView(context: Context) : View(context) {
         c.state = 3
         c.stateAt = nowMs
         c.dieAt = nowMs
-        audio.play(GameAudio.HIT3)
         audio.play(GameAudio.KNOCK, 1f, 0.7f)
         buzz(22)
     }
@@ -1223,8 +1230,11 @@ class GameView(context: Context) : View(context) {
             val e2 = err
             post {
                 analyzing = false
-                map = m2
-                mapErr = if (m2 == null) (if (e2.isEmpty()) "识别失败" else e2) else ""
+                map = if (m2 != null) m2 else {
+                    val dur = if (audio.durationMs > 0L) audio.durationMs else 120000L
+                    BeatMap(120.0, 500.0, 0.0, dur, ByteArray(0))
+                }
+                mapErr = if (m2 == null) "识别失败，已按 120 BPM 兜底" else ""
                 invalidate()
             }
         }.start()
