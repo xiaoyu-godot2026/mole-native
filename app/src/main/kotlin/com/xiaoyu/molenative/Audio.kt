@@ -95,6 +95,21 @@ class GameAudio(private val ctx: Context) {
     private var lastRawPos = -1L
     private var lastRawAt = 0L
 
+    /** 对局里必须关循环，菜单里才循环（循环会让游戏时钟卡在曲尾不动） */
+    private var loopBgm = true
+
+    /** 本曲是否已经播完（对局据此结算，不靠时钟猜） */
+    var completed = false
+        private set
+
+    fun setLooping(on: Boolean) {
+        loopBgm = on
+        try {
+            mp?.isLooping = on
+        } catch (t: Throwable) {
+        }
+    }
+
     /** 分析/播放音乐长度（毫秒） */
     var durationMs = 0L
         private set
@@ -144,6 +159,7 @@ class GameAudio(private val ctx: Context) {
     fun restartBgm() {
         wantBgm = true
         lastRawPos = -1L
+        completed = false
         val p = mp
         if (p == null) {
             startBgm()
@@ -151,6 +167,7 @@ class GameAudio(private val ctx: Context) {
         }
         try {
             if (!mpReady) return
+            p.isLooping = loopBgm
             p.seekTo(0)
             p.start()
         } catch (t: Throwable) {
@@ -213,7 +230,11 @@ class GameAudio(private val ctx: Context) {
         if (mp != null) {
             if (mpReady) {
                 try {
-                    if (mp?.isPlaying != true) mp?.start()
+                    if (mp?.isPlaying != true) {
+                        mp?.isLooping = loopBgm
+                        completed = false
+                        mp?.start()
+                    }
                 } catch (t: Throwable) {
                 }
             }
@@ -229,15 +250,18 @@ class GameAudio(private val ctx: Context) {
                         .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
                         .build()
                 )
-                p.isLooping = true
+                p.isLooping = loopBgm
                 p.setVolume(bgmVol, bgmVol)
                 p.setDataSource(ctx, Uri.parse(uriStr))
                 p.setOnPreparedListener { r ->
                     mp = r
                     mpReady = true
                     try {
+                        r.isLooping = loopBgm
+                        r.setOnCompletionListener { completed = true }
                         durationMs = r.duration.toLong()
                         r.setVolume(bgmVol, bgmVol)
+                        completed = false
                         if (wantBgm) r.start()
                     } catch (t: Throwable) {
                     }
@@ -272,8 +296,10 @@ class GameAudio(private val ctx: Context) {
         try {
             val p = MediaPlayer.create(ctx, R.raw.bgm)
             if (p == null) return
-            p.isLooping = true
+            p.isLooping = loopBgm
             p.setVolume(bgmVol, bgmVol)
+            p.setOnCompletionListener { completed = true }
+            completed = false
             p.start()
             mp = p
             mpReady = true

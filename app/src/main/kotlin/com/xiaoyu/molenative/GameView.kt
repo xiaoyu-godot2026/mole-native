@@ -180,6 +180,7 @@ class GameView(context: Context) : View(context) {
     private var missCount = 0
     private var notesTotal = 0
     private var lastSongPos = -1L
+    private var wallOnly = false
     private var gameStartAt = 0L
     private var mode = Mode.RHYTHM
     private var bestClassic = 0
@@ -315,7 +316,8 @@ class GameView(context: Context) : View(context) {
                 if (mode == Mode.RHYTHM) {
                     nowMs = songPos()
                     val m = map
-                    if (m != null && nowMs >= m.durationMs) gameOver() else tickRhythm()
+                    if (m != null && (nowMs >= m.durationMs || (audio.completed && nextBeat >= chart.size))) gameOver()
+                    else tickRhythm()
                 } else {
                     nowMs = System.currentTimeMillis()
                     tickClassic()
@@ -1238,6 +1240,10 @@ class GameView(context: Context) : View(context) {
             } else if (hh > 0.93f) {
                 hits = 2
             }
+            // 兜底轮转：保证绿盆(2下)、蓝盆(3下)一定会出现，不靠能量分布碰运气
+            val pc = chart.size
+            if (pc % 9 == 4) hits = 3
+            else if (pc % 4 == 2 && hits < 2) hits = 2
             if (k + hits > m.count) hits = 1
             val t = (m.time(k) + judgeOffset).toLong()
             val off = (hash(k + 37) * NC).toInt().coerceIn(0, NC - 1)
@@ -1576,9 +1582,7 @@ class GameView(context: Context) : View(context) {
             if (btnRect.contains(x, y)) {
                 start(mode)
             } else if (btnRect2.contains(x, y)) {
-                phase = Phase.READY
-                audio.restartBgm()
-                invalidate()
+                toMenu()
             }
             return true
         }
@@ -1630,8 +1634,21 @@ class GameView(context: Context) : View(context) {
     }
 
     private fun songPos(): Long {
+        if (wallOnly) {
+            val w = System.currentTimeMillis() - gameStartAt
+            if (w > lastSongPos) lastSongPos = w
+            return lastSongPos
+        }
         val raw = songPosRaw()
-        if (raw < lastSongPos) return lastSongPos
+        if (raw < lastSongPos) {
+            if (lastSongPos - raw > 300L) {
+                // 播放器回卷（循环/重播）：改由墙钟接管，保证这一局还能走到结算
+                wallOnly = true
+                gameStartAt = System.currentTimeMillis() - lastSongPos
+                Diag.line("rewind", lastSongPos.toString() + "->" + raw)
+            }
+            return lastSongPos
+        }
         if (lastSongPos > 0 && raw - lastSongPos > 700L) {
             // 时钟跳了一大截（切后台等）：把过期音符划掉，别让它们同一帧全冒出来
             Diag.line("jump", (raw - lastSongPos).toString())
@@ -1716,6 +1733,7 @@ class GameView(context: Context) : View(context) {
         }
         lastCell = -1
         lastFrame = 0L
+        wallOnly = false
         if (m0 == Mode.RHYTHM) {
             val m = map ?: return
             buildChart(m)
@@ -1723,6 +1741,7 @@ class GameView(context: Context) : View(context) {
             lastSongPos = -1L
             gameStartAt = System.currentTimeMillis()
             phase = Phase.PLAYING
+            audio.setLooping(false)
             audio.restartBgm()
             nowMs = 0L
         } else {
@@ -1730,6 +1749,7 @@ class GameView(context: Context) : View(context) {
             nowMs = startAt
             nextSpawnAt = startAt + 300L
             phase = Phase.PLAYING
+            audio.setLooping(true)
             bgmPolicy()
         }
         sfx(GameAudio.START, 1f, 0.5f)
@@ -1812,8 +1832,13 @@ class GameView(context: Context) : View(context) {
         if (mode != Mode.RHYTHM || phase != Phase.PLAYING) return
         audio.rebaseClock()
         // 音乐没就绪时不能拿墙钟当基准（墙钟在暂停期间还在走），退回冻结的那一帧
-        val pos = if (audio.bgmReady) audio.positionMs() else nowMs
-        if (pos <= 0L) return
+        val raw = if (audio.bgmReady) audio.positionMs() else nowMs
+        val pos = when {
+            raw <= 0L -> nowMs
+            lastSongPos <= 0L -> raw
+            raw > nowMs + 200L && raw - nowMs < 5000L -> raw
+            else -> nowMs   // 回卷或抖动：保持不动，别把谱面拽回开头
+        }
         if (lastSongPos > 0 && abs(pos - lastSongPos) > 200L) {
             Diag.line("resync", lastSongPos.toString() + "->" + pos)
         }
@@ -1828,8 +1853,14 @@ class GameView(context: Context) : View(context) {
         if (lost > 0) Diag.line("skipnotes", lost.toString())
     }
 
-    /** 放弃本局回主界面：不计分、不写最高分、不写诊断 */
+    /** 放弃本局回主界面：先把当前数据写一份诊断，再回菜单 */
     private fun exitToMenu() {
+        diagDump("quit")
+        toMenu()
+    }
+
+    /** 回主界面：不计分、不写最高分 */
+    private fun toMenu() {
         paused = false
         showSettings = false
         phase = Phase.READY
@@ -1846,6 +1877,8 @@ class GameView(context: Context) : View(context) {
         fx.clear()
         basins.clear()
         lastSongPos = -1L
+        wallOnly = false
+        audio.setLooping(true)
         audio.restartBgm()
         invalidate()
     }
@@ -1866,7 +1899,7 @@ class GameView(context: Context) : View(context) {
                 true
             }
             Phase.OVER -> {
-                exitToMenu()
+                toMenu()
                 true
             }
             else -> false
