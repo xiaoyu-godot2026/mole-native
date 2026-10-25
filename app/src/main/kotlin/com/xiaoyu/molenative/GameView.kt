@@ -39,7 +39,9 @@ class GameView(context: Context) : View(context) {
         var liveUntil = 0L
         var retreatAt = 0L
         var basinHp = 1
+        var basinColor = 0
         var basinShakeAt = 0L
+        var lastHitAt = 0L
         var p = 0f
     }
 
@@ -51,7 +53,7 @@ class GameView(context: Context) : View(context) {
 
     private class FlyBasin(
         var x: Float, var y: Float, var vx: Float, var vy: Float,
-        var rot: Float, val rotv: Float, val size: Float
+        var rot: Float, val rotv: Float, val size: Float, val color: Int
     )
 
     companion object {
@@ -95,7 +97,12 @@ class GameView(context: Context) : View(context) {
     private val bmpAngry = load(R.drawable.char_angry)
     private val bmpCry = load(R.drawable.char_cry)
     private val bmpDizzy = load(R.drawable.char_dizzy)
-    private val bmpBasin = load(R.drawable.basin_grey)
+    private val bmpBasins = arrayOf(
+        load(R.drawable.basin_grey),
+        load(R.drawable.basin_blue),
+        load(R.drawable.basin_green),
+        load(R.drawable.basin_red)
+    )
     private val faces = arrayOf(bmpHappy, bmpAngry, bmpCry, bmpDizzy)
 
     private fun load(id: Int): Bitmap {
@@ -171,7 +178,9 @@ class GameView(context: Context) : View(context) {
     }
 
     private fun layoutNow() {
+        if (width < 8 || height < 8) return
         vw = width.toFloat(); vh = height.toFloat() - insetTop
+        if (vw < 8f || vh < 8f) return
         hudH = vh * 0.115f
         skyH = vh * 0.235f
         cellW = vw / COLS
@@ -185,25 +194,28 @@ class GameView(context: Context) : View(context) {
         charH = charW * bmpHappy.height / bmpHappy.width
         cutOff = ry * 0.05f
 
-        skyShader = LinearGradient(
-            0f, 0f, 0f, skyH,
-            intArrayOf(Color.rgb(233, 247, 255), Color.rgb(191, 230, 248)),
-            floatArrayOf(0f, 1f), Shader.TileMode.CLAMP
-        )
-        seaShader = LinearGradient(
-            0f, skyH, 0f, vh,
-            intArrayOf(Color.rgb(143, 211, 239), Color.rgb(90, 170, 216), Color.rgb(38, 100, 146)),
-            floatArrayOf(0f, 0.35f, 1f), Shader.TileMode.CLAMP
-        )
-        sunShader = RadialGradient(
-            vw * 0.78f, skyH * 0.42f, vw * 0.30f,
-            intArrayOf(0x66FFF3C9, 0x00FFF3C9), null, Shader.TileMode.CLAMP
-        )
-        shadowShader = RadialGradient(
-            0f, 0f, 1f,
-            intArrayOf(0x8C08253C.toInt(), 0x5508253C, 0x0008253C),
-            floatArrayOf(0f, 0.55f, 1f), Shader.TileMode.CLAMP
-        )
+        try {
+            skyShader = LinearGradient(
+                0f, 0f, 0f, max(1f, skyH),
+                intArrayOf(Color.rgb(233, 247, 255), Color.rgb(191, 230, 248)),
+                floatArrayOf(0f, 1f), Shader.TileMode.CLAMP
+            )
+            seaShader = LinearGradient(
+                0f, skyH, 0f, max(skyH + 1f, vh),
+                intArrayOf(Color.rgb(143, 211, 239), Color.rgb(90, 170, 216), Color.rgb(38, 100, 146)),
+                floatArrayOf(0f, 0.35f, 1f), Shader.TileMode.CLAMP
+            )
+            sunShader = RadialGradient(
+                vw * 0.78f, skyH * 0.42f, max(2f, vw * 0.30f),
+                intArrayOf(0x66FFF3C9, 0x00FFF3C9), null, Shader.TileMode.CLAMP
+            )
+            shadowShader = RadialGradient(
+                0f, 0f, 1f,
+                intArrayOf(0x8C08253C.toInt(), 0x5508253C, 0x0008253C),
+                floatArrayOf(0f, 0.55f, 1f), Shader.TileMode.CLAMP
+            )
+        } catch (t: Throwable) {
+        }
     }
 
     private fun holeX(i: Int) = cellW * ((i % COLS) + 0.5f)
@@ -211,6 +223,27 @@ class GameView(context: Context) : View(context) {
     private fun cutY(i: Int) = holeY(i) + cutOff
 
     override fun onDraw(canvas: Canvas) {
+        try {
+            drawFrame(canvas)
+        } catch (t: Throwable) {
+            try {
+                pFill.shader = null
+                pFill.color = Color.BLACK
+                canvas.drawRect(0f, 0f, width.toFloat(), height.toFloat(), pFill)
+                pText.color = Color.WHITE
+                pText.textAlign = Paint.Align.LEFT
+                pText.textSize = 22f
+                var y = 60f
+                for (line in android.util.Log.getStackTraceString(t).split("\n").take(22)) {
+                    canvas.drawText(line.take(74), 16f, y, pText)
+                    y += 28f
+                }
+            } catch (e: Throwable) {
+            }
+        }
+    }
+
+    private fun drawFrame(canvas: Canvas) {
         nowMs = System.currentTimeMillis()
         val dt = if (lastFrame == 0L) 0f else min(48L, nowMs - lastFrame).toFloat()
         lastFrame = nowMs
@@ -320,8 +353,9 @@ class GameView(context: Context) : View(context) {
         canvas.drawBitmap(bmp, null, tmp2, pImg)
 
         if (c.state == 0) {
+            val bb = bmpBasins[c.basinColor]
             val bw = w * 0.78f
-            val bh = bw * bmpBasin.height / bmpBasin.width
+            val bh = bw * bb.height / bb.width
             val by = topY + h * 0.37f
             val sk = (nowMs - c.basinShakeAt) / 260f
             if (sk < 1f) {
@@ -330,11 +364,11 @@ class GameView(context: Context) : View(context) {
                 canvas.translate(cx + sin(nowMs / 21f) * dp(6f) * amp, by - bh / 2f)
                 canvas.rotate(sin(nowMs / 15f) * 7f * amp)
                 tmp2.set(-bw / 2f, -bh / 2f, bw / 2f, bh / 2f)
-                canvas.drawBitmap(bmpBasin, null, tmp2, pImg)
+                canvas.drawBitmap(bb, null, tmp2, pImg)
                 canvas.restore()
             } else {
                 tmp2.set(cx - bw / 2f, by - bh, cx + bw / 2f, by)
-                canvas.drawBitmap(bmpBasin, null, tmp2, pImg)
+                canvas.drawBitmap(bb, null, tmp2, pImg)
             }
         }
         canvas.restore()
@@ -345,7 +379,7 @@ class GameView(context: Context) : View(context) {
 
     private fun drawFlyBasins(canvas: Canvas) {
         for (b in basins) {
-            val bmp = bmpBasin
+            val bmp = bmpBasins[b.color]
             val w = b.size
             val h = w * bmp.height / bmp.width
             canvas.save()
@@ -566,8 +600,15 @@ class GameView(context: Context) : View(context) {
         c.stateAt = nowMs
         c.retreatAt = 0L
         val roll = Random.nextFloat()
-        c.basinHp = if (roll < 0.48f) 1 else if (roll < 0.80f) 2 else 3
+        c.basinColor = when {
+            roll < 0.50f -> 0
+            roll < 0.75f -> 1
+            roll < 0.90f -> 2
+            else -> 3
+        }
+        c.basinHp = c.basinColor + 1
         c.basinShakeAt = 0L
+        c.lastHitAt = 0L
         c.liveUntil = nowMs + (1500L - min(score * 8L, 520L)).coerceAtLeast(900L) + (c.basinHp - 1) * 460L
         c.p = 0f
         fx.add(Fx(1, holeX(i), holeY(i), 0f, 0f, 520L, nowMs, null, 0, 0f))
@@ -578,6 +619,10 @@ class GameView(context: Context) : View(context) {
         val cx = holeX(i)
         val cy = cutY(i)
         val mult = 1 + min(combo / 5, 3)
+
+        // 单只冷却，防止狂点秒杀
+        if (nowMs - c.lastHitAt < 220L) return
+        c.lastHitAt = nowMs
 
         // 铁盆还有血：先砸一下，不掉
         if (c.state == 0 && c.basinHp > 1) {
@@ -597,9 +642,9 @@ class GameView(context: Context) : View(context) {
         // 盆被打飞
         if (c.state == 0) {
             val bw = charW * 0.78f
-            val bh = bw * bmpBasin.height / bmpBasin.width
+            val bh = bw * bmpBasins[c.basinColor].height / bmpBasins[c.basinColor].width
             val baseTop = cutY(i) - charH * (HEAD_LIFT + HEAD_C) + (1f - c.p) * charH * RISE_TRAVEL
-            val by = baseTop + charH * 0.36f - bh / 2f
+            val by = baseTop + charH * 0.37f - bh / 2f
             val dir = if (Random.nextBoolean()) 1f else -1f
             basins.add(
                 FlyBasin(
@@ -608,7 +653,8 @@ class GameView(context: Context) : View(context) {
                     -dp(420f + Random.nextFloat() * 160f),
                     0f,
                     dir * (300f + Random.nextFloat() * 260f),
-                    bw
+                    bw,
+                    c.basinColor
                 )
             )
             for (k in 0 until 3) {

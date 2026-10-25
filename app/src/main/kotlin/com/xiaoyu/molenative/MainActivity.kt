@@ -13,7 +13,16 @@ class MainActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-        setContentView(GameView(this))
+        try {
+            setContentView(GameView(this))
+        } catch (t: Throwable) {
+            val tv = android.widget.TextView(this)
+            tv.text = "启动失败:\n" + android.util.Log.getStackTraceString(t)
+            tv.setTextColor(android.graphics.Color.WHITE)
+            tv.setBackgroundColor(android.graphics.Color.BLACK)
+            tv.textSize = 11f
+            setContentView(tv)
+        }
         hideSystemBars()
     }
 
