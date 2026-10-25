@@ -8,6 +8,7 @@
   python3 tools/release.py push "说明" --ver 3.5      顺便改版本号
   python3 tools/release.py build                     等 CI 编完并取回 APK
   python3 tools/release.py deploy /tmp/x.apk [名字]   推到手机 Download
+  python3 tools/release.py logs                      拉最近一次 CI 日志（找编译错误）
   python3 tools/release.py all "说明" --ver 3.5       一条龙
 
 设计要点：diff 的真值在远端 main（本地 git 停在首版，不能当基线）。
@@ -204,6 +205,36 @@ def cmd_build():
     return 0
 
 
+def cmd_logs():
+    runs = gh('GET', '/actions/runs?branch=main&per_page=5').get('workflow_runs', [])
+    if not runs:
+        print('没有 CI 记录')
+        return 2
+    r = runs[0]
+    print('run %s  %s  %s' % (r['id'], r['status'], r.get('conclusion')))
+    jobs = gh('GET', '/actions/runs/%d/jobs' % r['id']).get('jobs', [])
+    if not jobs:
+        print('没有 job')
+        return 2
+    for j in jobs:
+        url = 'https://api.github.com/repos/%s/%s/actions/jobs/%d/logs' % (OWNER, REPO, j['id'])
+        out = '/tmp/ci-log.txt'
+        subprocess.run(['curl', '-sSL', '-H', 'Authorization: Bearer ' + TOKEN, '-o', out, url])
+        print('job %s  %s  log=%s (%d 行)' % (j['name'], j.get('conclusion'), out,
+              len(open(out, encoding='utf-8', errors='replace').read().splitlines())))
+    print('--- 可疑行 ---')
+    keys = ('e: ', 'error:', 'FAILURE:', 'Execution failed', 'Caused by', 'FAILED')
+    shown = 0
+    for ln in open(out, encoding='utf-8', errors='replace').read().splitlines():
+        if any(k in ln for k in keys):
+            print('  ' + ln[:240])
+            shown += 1
+            if shown > 40:
+                print('  ...')
+                break
+    return 0
+
+
 def cmd_deploy(path, name=None):
     if not os.path.isfile(path):
         sys.exit('文件不存在: ' + path)
@@ -246,6 +277,8 @@ def main():
         return cmd_push(rest[0])
     if cmd == 'build':
         return cmd_build()
+    if cmd == 'logs':
+        return cmd_logs()
     if cmd == 'deploy':
         return cmd_deploy(rest[0], rest[1] if len(rest) > 1 else None)
     if cmd == 'all':
