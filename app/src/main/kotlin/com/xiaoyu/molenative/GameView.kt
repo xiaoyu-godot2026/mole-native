@@ -1,6 +1,8 @@
 package com.xiaoyu.molenative
 
 import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.LinearGradient
 import android.graphics.Paint
@@ -14,7 +16,6 @@ import android.os.VibrationEffect
 import android.os.Vibrator
 import android.view.MotionEvent
 import android.view.View
-import kotlin.math.cos
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.sin
@@ -22,17 +23,29 @@ import kotlin.random.Random
 
 /**
  * 打地鼠 · 原生版
- * 全部画面由 Canvas 实时绘制，不依赖任何图片资源，安装包只有几十 KB。
+ * 蓝发鲸鱼少女从海面冒头，头顶扣着铁饭盆；敲掉铁盆她会生气。
+ * 画面全部实时绘制 + 三张精灵图，安装包仍只有 1 MB 上下。
  */
 class GameView(context: Context) : View(context) {
 
     private enum class Phase { READY, PLAYING, OVER }
 
     private class Cell {
-        var target = 0f      // 目标位置：0 藏起来，1 探出来
-        var p = 0f           // 当前动画进度
-        var hideAt = 0L      // 该缩回去的时间
-        var flash = 0f       // 命中反馈
+        var target = 0f
+        var p = 0f
+        var hideAt = 0L
+        var hit = false
+        var hitAt = 0L
+        // 被打飞出去的铁饭盆
+        var basinActive = false
+        var bx = 0f
+        var by = 0f
+        var bvx = 0f
+        var bvy = 0f
+        var brot = 0f
+        var brotv = 0f
+        var balpha = 1f
+        var bsize = 0f
     }
 
     private class Fx(
@@ -44,7 +57,8 @@ class GameView(context: Context) : View(context) {
         val maxLife: Float,
         val text: String?,
         val color: Int,
-        val kind: Int
+        val kind: Int,
+        val size: Float = 1f
     )
 
     private companion object {
@@ -52,24 +66,16 @@ class GameView(context: Context) : View(context) {
         const val ROWS = 3
         const val ROUND_MS = 30_000L
 
-        val C_WHITE = 0xFFF7FFF9.toInt()
-        val C_MUTED = 0xFF9FC7AE.toInt()
-        val C_HOLE = 0xFF150C06.toInt()
-        val C_HOLE_RIM = 0xFF5A3A22.toInt()
-        val C_HOLE_LIP = 0xFF8A6444.toInt()
-        val C_FUR = 0xFF9A6739.toInt()
-        val C_FUR_LIGHT = 0xFFC08A5A.toInt()
-        val C_EAR = 0xFF7A4F2A.toInt()
-        val C_EAR_IN = 0xFFD89E76.toInt()
-        val C_MUZZLE = 0xFFF5DDBC.toInt()
-        val C_NOSE = 0xFFEC7C92.toInt()
-        val C_CHEEK = 0xFFF093A1.toInt()
-        val C_INK = 0xFF22130A.toInt()
+        val C_WHITE = 0xFFF2FBFF.toInt()
+        val C_MUTED = 0xFFA6CEE2.toInt()
         val C_GOLD = 0xFFFFD75E.toInt()
-        val C_BTN_A = 0xFFFFA24F.toInt()
-        val C_BTN_B = 0xFFF2612B.toInt()
-        val C_CARD = 0xFF123A2A.toInt()
-        val C_GRASS = 0xFF2E8B58.toInt()
+        val C_SPOT = 0xFF155F8C.toInt()
+        val C_SPOT_DEEP = 0xFF0A3A5A.toInt()
+        val C_FOAM = 0xFFBDE9FF.toInt()
+        val C_BTN_A = 0xFF37B3F2.toInt()
+        val C_BTN_B = 0xFF1668AE.toInt()
+        val C_CARD = 0xFF0B3D5E.toInt()
+        val C_ANGRY = 0xFFFF6B6B.toInt()
     }
 
     private val cells = Array(COLS * ROWS) { Cell() }
@@ -94,30 +100,33 @@ class GameView(context: Context) : View(context) {
 
     private val dp = resources.displayMetrics.density
 
-    // ---- 布局 ----
+    private val happyBmp: Bitmap = BitmapFactory.decodeResource(resources, R.drawable.char_happy)
+    private val angryBmp: Bitmap = BitmapFactory.decodeResource(resources, R.drawable.char_angry)
+    private val basinBmp: Bitmap = BitmapFactory.decodeResource(resources, R.drawable.basin)
+
     private var cellSize = 0f
     private var gridLeft = 0f
     private var gridTop = 0f
-    private var holeRx = 0f
-    private var holeRy = 0f
+    private var spotRx = 0f
+    private var spotRy = 0f
 
     private val startBtn = RectF()
     private val againBtn = RectF()
     private val soundChip = RectF()
 
-    // ---- 画笔 ----
     private val pFill = Paint(Paint.ANTI_ALIAS_FLAG)
     private val pStroke = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE }
     private val pText = Paint(Paint.ANTI_ALIAS_FLAG)
     private val pBg = Paint(Paint.ANTI_ALIAS_FLAG)
     private val pShadow = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val pBmp = Paint(Paint.ANTI_ALIAS_FLAG).apply { isFilterBitmap = true }
     private val tmp = RectF()
     private val outerRect = RectF()
     private val innerRect = RectF()
+    private val charRect = RectF()
+    private val basinRect = RectF()
     private val btnPath = Path()
-    private val rimPath = Path()
-    private val bodyPath = Path()
-    private val mouthPath = Path()
+    private val lipPath = Path()
 
     init {
         best = prefs.getInt("best", 0)
@@ -126,7 +135,6 @@ class GameView(context: Context) : View(context) {
         isClickable = true
     }
 
-    // ------------------------------------------------------------------ 尺寸
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
         super.onSizeChanged(w, h, oldw, oldh)
         val pad = w * 0.055f
@@ -137,23 +145,21 @@ class GameView(context: Context) : View(context) {
         cellSize = min(cw, ch)
         gridLeft = (w - cellSize * COLS) / 2f
         gridTop = top + ((bot - top) - cellSize * ROWS) / 2f
-        holeRx = cellSize * 0.40f
-        holeRy = cellSize * 0.185f
+        spotRx = cellSize * 0.42f
+        spotRy = cellSize * 0.17f
 
         pBg.shader = LinearGradient(
-            0f, 0f, w * 0.25f, h.toFloat(),
-            0xFF145034.toInt(), 0xFF061A12.toInt(), Shader.TileMode.CLAMP
+            0f, 0f, w * 0.2f, h.toFloat(),
+            0xFF1B85BC.toInt(), 0xFF04203A.toInt(), Shader.TileMode.CLAMP
         )
 
         val bw = min(w * 0.58f, dp * 240f)
         val bh = dp * 56f
-        startBtn.set(w / 2f - bw / 2f, h * 0.615f, w / 2f + bw / 2f, h * 0.615f + bh)
+        startBtn.set(w / 2f - bw / 2f, h * 0.655f, w / 2f + bw / 2f, h * 0.655f + bh)
         againBtn.set(startBtn)
         soundChip.set(w / 2f - dp * 46f, h - dp * 46f, w / 2f + dp * 46f, h - dp * 20f)
-
     }
 
-    // ------------------------------------------------------------------ 帧循环
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
         if (width == 0 || height == 0) return
@@ -197,9 +203,12 @@ class GameView(context: Context) : View(context) {
                     }
                     if (free.isNotEmpty()) {
                         val idx = free[Random.nextInt(free.size)]
-                        cells[idx].target = 1f
-                        cells[idx].hideAt = now +
-                            (lerp(1150f, 620f, t) * (0.86f + Random.nextFloat() * 0.28f)).toLong()
+                        val c = cells[idx]
+                        c.target = 1f
+                        c.hit = false
+                        c.hideAt = now +
+                            (lerp(1250f, 700f, t) * (0.86f + Random.nextFloat() * 0.28f)).toLong()
+                        splash(idx)
                     }
                     nextSpawnAt = now +
                         (lerp(790f, 330f, t) * (0.85f + Random.nextFloat() * 0.3f)).toLong()
@@ -211,7 +220,14 @@ class GameView(context: Context) : View(context) {
             c.p += (c.target - c.p) * min(1f, dt * 15f)
             if (c.p < 0.003f && c.target == 0f) c.p = 0f
             if (c.target > 0f && now >= c.hideAt) c.target = 0f
-            if (c.flash > 0f) c.flash = max(0f, c.flash - dt * 2.6f)
+            if (c.basinActive) {
+                c.bx += c.bvx * dt
+                c.by += c.bvy * dt
+                c.bvy += dp * 1500f * dt
+                c.brot += c.brotv * dt
+                c.balpha -= dt * 0.85f
+                if (c.balpha <= 0f) c.basinActive = false
+            }
         }
 
         if (combo > 0 && now - lastHitAt > 1700) combo = 0
@@ -227,22 +243,45 @@ class GameView(context: Context) : View(context) {
         }
     }
 
-    // ------------------------------------------------------------------ 背景
+    private fun splash(idx: Int) {
+        val cx = holeCx(idx)
+        val cy = holeCy(idx)
+        repeat(7) {
+            val a = -0.2f + Random.nextFloat() * 3.4f
+            val sp = dp * (90f + Random.nextFloat() * 130f)
+            fx.add(
+                Fx(
+                    cx + (Random.nextFloat() - 0.5f) * spotRx,
+                    cy,
+                    kotlin.math.cos(a) * sp * 0.7f,
+                    -kotlin.math.abs(sin(a)) * sp,
+                    0.5f, 0.5f, null, 0xFFE6F8FF.toInt(), 2, 0.7f
+                )
+            )
+        }
+    }
+
     private fun drawBackground(canvas: Canvas) {
         canvas.drawRect(0f, 0f, width.toFloat(), height.toFloat(), pBg)
 
-        pFill.color = 0x2233C97E
-        canvas.drawCircle(width * 0.15f, height * 0.10f, width * 0.42f, pFill)
-        pFill.color = 0x1A1FB26C
-        canvas.drawCircle(width * 0.92f, height * 0.30f, width * 0.36f, pFill)
+        // 光束
+        pFill.color = 0x14FFFFFF
+        val rayPath = Path()
+        for (i in 0 until 3) {
+            val bx = width * (0.1f + i * 0.34f)
+            rayPath.reset()
+            rayPath.moveTo(bx, 0f)
+            rayPath.lineTo(bx + width * 0.16f, 0f)
+            rayPath.lineTo(bx + width * 0.34f, height * 0.95f)
+            rayPath.lineTo(bx + width * 0.10f, height * 0.95f)
+            rayPath.close()
+            canvas.drawPath(rayPath, pFill)
+        }
 
-        // 底部草地
-        val grassTop = height * 0.945f
-        pFill.color = 0x3316B36B
-        canvas.drawRect(0f, grassTop, width.toFloat(), height.toFloat(), pFill)
+        pFill.color = 0x1A6FD0F5
+        canvas.drawCircle(width * 0.85f, height * 0.12f, width * 0.3f, pFill)
     }
 
-    // ------------------------------------------------------------------ 顶部信息
     private fun drawHud(canvas: Canvas) {
         val pad = width * 0.055f
         val topY = height * 0.055f
@@ -251,10 +290,7 @@ class GameView(context: Context) : View(context) {
         text(canvas, score.toString(), pad, topY + dp * 34f, 32f, C_WHITE, Paint.Align.LEFT, true)
 
         text(canvas, "最高", width - pad, topY, 12f, C_MUTED, Paint.Align.RIGHT, true)
-        text(
-            canvas, best.toString(), width - pad, topY + dp * 30f, 20f,
-            C_GOLD, Paint.Align.RIGHT, true
-        )
+        text(canvas, best.toString(), width - pad, topY + dp * 30f, 20f, C_GOLD, Paint.Align.RIGHT, true)
 
         if (phase == Phase.PLAYING) {
             val left = nowMs - startAt
@@ -265,7 +301,7 @@ class GameView(context: Context) : View(context) {
             pFill.color = 0x33FFFFFF
             canvas.drawRoundRect(tmp, hgt / 2f, hgt / 2f, pFill)
             pFill.color = when {
-                ratio > 0.5f -> 0xFF4CD787.toInt()
+                ratio > 0.5f -> 0xFF5FE3C0.toInt()
                 ratio > 0.22f -> 0xFFFFC044.toInt()
                 else -> 0xFFFF6B5E.toInt()
             }
@@ -285,157 +321,89 @@ class GameView(context: Context) : View(context) {
         }
     }
 
-    // ------------------------------------------------------------------ 棋盘
     private fun drawBoard(canvas: Canvas) {
         for (i in 0 until COLS * ROWS) {
             val cx = holeCx(i)
             val cy = holeCy(i)
-
-            tmp.set(cx - holeRx * 1.06f, cy - holeRy * 1.15f, cx + holeRx * 1.06f, cy + holeRy * 1.15f)
-            pFill.color = C_HOLE_RIM
-            canvas.drawOval(tmp, pFill)
-            tmp.set(cx - holeRx, cy - holeRy, cx + holeRx, cy + holeRy)
-            pFill.color = C_HOLE
-            canvas.drawOval(tmp, pFill)
-            pStroke.color = 0x1AFFFFFF
-            pStroke.strokeWidth = dp * 1.2f
-            canvas.drawOval(tmp, pStroke)
-
             val c = cells[i]
-            if (c.p > 0.01f) {
-                drawMole(canvas, cx, cy + holeRy * 0.95f, holeRx * 0.80f, holeRy * 1.95f, c.p, c.flash, i)
-            }
 
-            // 前沿：遮住鼹鼠下半身，做出“从洞里钻出来”的感觉
-            // 前沿：外圈下半沿 + 内圈下半沿反向 = 一圈月牙形的土沿
-            val rim = rimPath
-            rim.reset()
-            outerRect.set(cx - holeRx * 1.07f, cy - holeRy * 1.14f, cx + holeRx * 1.07f, cy + holeRy * 1.14f)
-            innerRect.set(cx - holeRx * 0.90f, cy - holeRy * 0.92f, cx + holeRx * 0.90f, cy + holeRy * 0.92f)
-            rim.addArc(outerRect, 0f, 180f)
-            rim.addArc(innerRect, 180f, -180f)
-            rim.close()
-            pFill.color = C_HOLE_RIM
-            canvas.drawPath(rim, pFill)
-            pStroke.color = C_HOLE_LIP
-            pStroke.strokeWidth = dp * 1.2f
-            pStroke.alpha = 110
-            canvas.drawPath(rim, pStroke)
+            // 水面
+            tmp.set(cx - spotRx * 1.12f, cy - spotRy * 1.16f, cx + spotRx * 1.12f, cy + spotRy * 1.16f)
+            pFill.color = 0x332FA8DC
+            canvas.drawOval(tmp, pFill)
+
+            tmp.set(cx - spotRx, cy - spotRy, cx + spotRx, cy + spotRy)
+            pFill.color = C_SPOT_DEEP
+            canvas.drawOval(tmp, pFill)
+
+            // 涟漪
+            val rip = ((time * 0.45f + i * 0.17f) % 1f)
+            outerRect.set(
+                cx - spotRx * (1f + rip * 0.22f), cy - spotRy * (1f + rip * 0.3f),
+                cx + spotRx * (1f + rip * 0.22f), cy + spotRy * (1f + rip * 0.3f)
+            )
+            pStroke.color = 0x40E8FBFF
+            pStroke.strokeWidth = dp * 1.6f
+            pStroke.alpha = ((1f - rip) * 150).toInt()
+            canvas.drawOval(outerRect, pStroke)
             pStroke.alpha = 255
+
+            if (c.p > 0.01f) drawChar(canvas, c, cx, cy + spotRy * 0.5f, cellSize * 0.80f, i)
+
+            // 水面盖住她的下半身
+            val lip = lipPath
+            lip.reset()
+            outerRect.set(cx - spotRx * 1.04f, cy - spotRy * 1.06f, cx + spotRx * 1.04f, cy + spotRy * 1.06f)
+            innerRect.set(cx - spotRx * 0.86f, cy - spotRy * 0.80f, cx + spotRx * 0.86f, cy + spotRy * 0.80f)
+            lip.addArc(outerRect, 0f, 180f)
+            lip.addArc(innerRect, 180f, -180f)
+            lip.close()
+            pFill.color = 0x552FA8DC
+            canvas.drawPath(lip, pFill)
+            pStroke.color = C_FOAM
+            pStroke.strokeWidth = dp * 2f
+            pStroke.alpha = 90
+            canvas.drawPath(lip, pStroke)
+            pStroke.alpha = 255
+
+            if (c.basinActive) drawFlyingBasin(canvas, c)
         }
     }
 
-    private fun drawMole(
-        canvas: Canvas,
-        cx: Float,
-        baseY: Float,
-        mw: Float,
-        mh: Float,
-        progress: Float,
-        flash: Float,
-        idx: Int
-    ) {
-        val sRaw = easeOutBack(progress)
-        val s = sRaw.coerceIn(0f, 1.15f)
+    private fun drawChar(canvas: Canvas, c: Cell, cx: Float, baseY: Float, w: Float, idx: Int) {
+        val s = easeOutBack(c.p).coerceIn(0f, 1.12f)
         if (s <= 0.02f) return
+        val h = w * 0.8203f
+        val by = baseY + (1f - s) * h * 0.95f
+        val left = cx - w * s / 2f
+        val topY = by - h * s
+        charRect.set(left, topY, cx + w * s / 2f, by)
+        val bmp = if (c.hit) angryBmp else happyBmp
+        canvas.drawBitmap(bmp, null, charRect, pBmp)
 
-        val by = baseY + (1f - s) * mh * 2.3f
-
-        canvas.save()
-        canvas.scale(s, s, cx, by)
-
-        // 耳朵
-        pFill.color = C_EAR
-        canvas.drawCircle(cx - mw * 0.88f, by - mh * 1.16f, mw * 0.27f, pFill)
-        canvas.drawCircle(cx + mw * 0.88f, by - mh * 1.16f, mw * 0.27f, pFill)
-        pFill.color = C_EAR_IN
-        canvas.drawCircle(cx - mw * 0.88f, by - mh * 1.16f, mw * 0.13f, pFill)
-        canvas.drawCircle(cx + mw * 0.88f, by - mh * 1.16f, mw * 0.13f, pFill)
-
-        // 身体
-        val body = bodyPath
-        body.reset()
-        body.moveTo(cx - mw, by)
-        body.cubicTo(cx - mw, by - mh * 1.95f, cx + mw, by - mh * 1.95f, cx + mw, by)
-        body.close()
-        pFill.color = C_FUR
-        canvas.drawPath(body, pFill)
-
-        // 头顶高光
-        pFill.color = C_FUR_LIGHT
-        pFill.alpha = 70
-        tmp.set(cx - mw * 0.50f, by - mh * 1.30f, cx + mw * 0.50f, by - mh * 0.88f)
-        canvas.drawOval(tmp, pFill)
-        pFill.alpha = 255
-
-        // 眼睛
-        val eyeY = by - mh * 1.02f
-        val eyeDx = mw * 0.36f
-        val blink = flash <= 0.01f && ((nowMs + idx * 640L) % 3700L) > 3560L
-        if (flash > 0.01f) {
-            pStroke.color = C_INK
-            pStroke.strokeWidth = mw * 0.10f
-            for (sgn in intArrayOf(-1, 1)) {
-                val ex = cx + sgn * eyeDx
-                val r = mw * 0.20f
-                canvas.drawLine(ex - r, eyeY - r, ex + r, eyeY + r, pStroke)
-                canvas.drawLine(ex - r, eyeY + r, ex + r, eyeY - r, pStroke)
-            }
-        } else if (blink) {
-            pStroke.color = C_INK
-            pStroke.strokeWidth = mw * 0.075f
-            canvas.drawLine(cx - eyeDx - mw * 0.17f, eyeY, cx - eyeDx + mw * 0.17f, eyeY, pStroke)
-            canvas.drawLine(cx + eyeDx - mw * 0.17f, eyeY, cx + eyeDx + mw * 0.17f, eyeY, pStroke)
-        } else {
-            pFill.color = 0xFFFFFFFF.toInt()
-            tmp.set(cx - eyeDx - mw * 0.21f, eyeY - mw * 0.25f, cx - eyeDx + mw * 0.21f, eyeY + mw * 0.25f)
-            canvas.drawOval(tmp, pFill)
-            tmp.set(cx + eyeDx - mw * 0.21f, eyeY - mw * 0.25f, cx + eyeDx + mw * 0.21f, eyeY + mw * 0.25f)
-            canvas.drawOval(tmp, pFill)
-
-            pFill.color = C_INK
-            canvas.drawCircle(cx - eyeDx + mw * 0.03f, eyeY + mw * 0.02f, mw * 0.105f, pFill)
-            canvas.drawCircle(cx + eyeDx + mw * 0.03f, eyeY + mw * 0.02f, mw * 0.105f, pFill)
-
-            pFill.color = 0xFFFFFFFF.toInt()
-            canvas.drawCircle(cx - eyeDx - mw * 0.02f, eyeY - mw * 0.06f, mw * 0.042f, pFill)
-            canvas.drawCircle(cx + eyeDx - mw * 0.02f, eyeY - mw * 0.06f, mw * 0.042f, pFill)
+        if (!c.hit) {
+            val bw = w * 0.60f * s
+            val bh = bw * 0.625f
+            val tilt = sin((time + idx * 0.7f) * 2.0f) * 3.5f
+            canvas.save()
+            canvas.rotate(tilt, cx, topY + bh * 0.35f)
+            basinRect.set(cx - bw / 2f, topY - bh * 0.42f, cx + bw / 2f, topY + bh * 0.58f)
+            canvas.drawBitmap(basinBmp, null, basinRect, pBmp)
+            canvas.restore()
         }
-
-        // 口鼻
-        tmp.set(cx - mw * 0.58f, by - mh * 0.96f, cx + mw * 0.58f, by - mh * 0.16f)
-        pFill.color = C_MUZZLE
-        canvas.drawOval(tmp, pFill)
-
-        tmp.set(cx - mw * 0.17f, by - mh * 0.93f, cx + mw * 0.17f, by - mh * 0.71f)
-        pFill.color = C_NOSE
-        canvas.drawOval(tmp, pFill)
-
-        pStroke.color = 0xFF8B5636.toInt()
-        pStroke.strokeWidth = mw * 0.05f
-        val mouth = mouthPath
-        mouth.reset()
-        mouth.moveTo(cx, by - mh * 0.72f)
-        mouth.lineTo(cx, by - mh * 0.60f)
-        mouth.moveTo(cx, by - mh * 0.60f)
-        mouth.quadTo(cx - mw * 0.15f, by - mh * 0.45f, cx - mw * 0.25f, by - mh * 0.56f)
-        mouth.moveTo(cx, by - mh * 0.60f)
-        mouth.quadTo(cx + mw * 0.15f, by - mh * 0.45f, cx + mw * 0.25f, by - mh * 0.56f)
-        canvas.drawPath(mouth, pStroke)
-
-        // 腮红
-        pFill.color = C_CHEEK
-        pFill.alpha = 145
-        tmp.set(cx - mw * 0.88f, by - mh * 0.78f, cx - mw * 0.56f, by - mh * 0.56f)
-        canvas.drawOval(tmp, pFill)
-        tmp.set(cx + mw * 0.56f, by - mh * 0.78f, cx + mw * 0.88f, by - mh * 0.56f)
-        canvas.drawOval(tmp, pFill)
-        pFill.alpha = 255
-
-        canvas.restore()
     }
 
-    // ------------------------------------------------------------------ 特效
+    private fun drawFlyingBasin(canvas: Canvas, c: Cell) {
+        val sz = c.bsize
+        pBmp.alpha = (255 * c.balpha).toInt().coerceIn(0, 255)
+        canvas.save()
+        canvas.rotate(c.brot, c.bx, c.by)
+        basinRect.set(c.bx - sz, c.by - sz * 0.62f, c.bx + sz, c.by + sz * 0.62f)
+        canvas.drawBitmap(basinBmp, null, basinRect, pBmp)
+        canvas.restore()
+        pBmp.alpha = 255
+    }
+
     private fun drawFx(canvas: Canvas) {
         for (f in fx) {
             val k = (f.life / f.maxLife).coerceIn(0f, 1f)
@@ -448,13 +416,13 @@ class GameView(context: Context) : View(context) {
                     pStroke.color = f.color
                     pStroke.strokeWidth = dp * 3f * k
                     pStroke.alpha = (200 * k).toInt()
-                    canvas.drawCircle(f.x, f.y, holeRx * 1.5f * (1f - k), pStroke)
+                    canvas.drawCircle(f.x, f.y, spotRx * 1.4f * (1f - k), pStroke)
                     pStroke.alpha = 255
                 }
                 2 -> {
                     pFill.color = f.color
                     pFill.alpha = (230 * k).toInt()
-                    canvas.drawCircle(f.x, f.y, dp * 2.6f * k + dp * 0.8f, pFill)
+                    canvas.drawCircle(f.x, f.y, dp * 2.4f * f.size * k + dp * 0.7f, pFill)
                     pFill.alpha = 255
                 }
                 3 -> {
@@ -464,39 +432,51 @@ class GameView(context: Context) : View(context) {
                         Paint.Align.CENTER, true, (255 * k).toInt()
                     )
                 }
+                5 -> {
+                    // 生气符号（十字青筋）
+                    val r = dp * 6f
+                    pStroke.color = f.color
+                    pStroke.strokeWidth = dp * 2.6f
+                    pStroke.alpha = (255 * k).toInt()
+                    canvas.drawLine(f.x - r, f.y - r, f.x + r, f.y + r, pStroke)
+                    canvas.drawLine(f.x - r, f.y + r, f.x + r, f.y - r, pStroke)
+                    pStroke.alpha = 255
+                }
             }
         }
     }
 
-    // ------------------------------------------------------------------ 开始页
     private fun drawReady(canvas: Canvas) {
-        pFill.color = 0xB307241A.toInt()
+        pFill.color = 0xB3041C30.toInt()
         canvas.drawRect(0f, 0f, width.toFloat(), height.toFloat(), pFill)
 
-        val bob = sin(time * 2.2f) * dp * 3f
-        drawMole(canvas, width / 2f, height * 0.235f + bob, width * 0.105f, width * 0.14f, 1f, 0f, 0)
+        val bob = sin(time * 2.0f) * dp * 3f
+        demoCell.p = 1f
+        demoCell.hit = false
+        drawChar(canvas, demoCell, width / 2f, height * 0.255f + bob, width * 0.46f, 0)
 
-        text(canvas, "打地鼠", width / 2f, height * 0.345f, 44f, C_WHITE, Paint.Align.CENTER, true)
+        text(canvas, "打地鼠", width / 2f, height * 0.375f, 44f, C_WHITE, Paint.Align.CENTER, true)
         text(
-            canvas, "30 秒 · 打得越快分越高", width / 2f, height * 0.345f + dp * 34f,
+            canvas, "敲掉她头上的铁饭盆", width / 2f, height * 0.375f + dp * 32f,
             14f, C_MUTED, Paint.Align.CENTER
         )
         text(
-            canvas, "最高分  $best", width / 2f, height * 0.345f + dp * 72f,
+            canvas, "最高分  $best", width / 2f, height * 0.375f + dp * 68f,
             15f, C_GOLD, Paint.Align.CENTER, true
         )
 
         drawButton(canvas, startBtn, "开 始")
         text(
-            canvas, "点击冒头的地鼠", width / 2f, startBtn.bottom + dp * 30f,
+            canvas, "30 秒 · 打得越快分越高", width / 2f, startBtn.bottom + dp * 30f,
             12f, C_MUTED, Paint.Align.CENTER
         )
         drawSoundChip(canvas)
     }
 
-    // ------------------------------------------------------------------ 结算页
+    private val demoCell = Cell()
+
     private fun drawOver(canvas: Canvas) {
-        pFill.color = 0xB307241A.toInt()
+        pFill.color = 0xB3041C30.toInt()
         canvas.drawRect(0f, 0f, width.toFloat(), height.toFloat(), pFill)
 
         val cw = width * 0.84f
@@ -531,7 +511,6 @@ class GameView(context: Context) : View(context) {
         drawSoundChip(canvas)
     }
 
-    // ------------------------------------------------------------------ 组件
     private fun drawButton(canvas: Canvas, r: RectF, label: String) {
         val rr = r.height() / 2f
         tmp.set(r.left, r.top + dp * 5f, r.right, r.bottom + dp * 5f)
@@ -589,7 +568,6 @@ class GameView(context: Context) : View(context) {
         canvas.drawText(s, x, y, pText)
     }
 
-    // ------------------------------------------------------------------ 输入
     override fun onTouchEvent(e: MotionEvent): Boolean {
         if (e.action != MotionEvent.ACTION_DOWN) return true
         if (cellSize == 0f) return true
@@ -615,9 +593,9 @@ class GameView(context: Context) : View(context) {
         var bestD = 1.6f
         for (i in cells.indices) {
             val c = cells[i]
-            if (c.p < 0.45f) continue
-            val dx = (x - holeCx(i)) / (holeRx * 1.25f)
-            val dy = (y - (holeCy(i) - holeRy * 1.5f)) / (holeRy * 3.0f)
+            if (c.p < 0.45f || c.hit) continue
+            val dx = (x - holeCx(i)) / (spotRx * 1.15f)
+            val dy = (y - (holeCy(i) - spotRy * 2.2f)) / (spotRy * 4.4f)
             val d = dx * dx + dy * dy
             if (d < 1f && d < bestD) {
                 bestD = d
@@ -626,28 +604,32 @@ class GameView(context: Context) : View(context) {
         }
 
         if (idx >= 0) {
+            val c = cells[idx]
             val pts = 1 + min(combo / 5, 3)
             score += pts
             combo += 1
             lastHitAt = nowMs
-            cells[idx].target = 0f
-            cells[idx].flash = 1f
+            c.hit = true
+            c.hitAt = nowMs
+            c.hideAt = nowMs + 750
+
+            // 铁盆飞出去
+            val w = cellSize * 0.80f
+            c.bsize = w * 0.60f / 2f
+            c.bx = holeCx(idx)
+            c.by = holeCy(idx) - w * 0.8203f + dp * 4f
+            c.bvx = (if (Random.nextBoolean()) 1 else -1) * dp * (80f + Random.nextFloat() * 120f)
+            c.bvy = -dp * (430f + Random.nextFloat() * 130f)
+            c.brot = 0f
+            c.brotv = (if (c.bvx > 0) 1 else -1) * (260f + Random.nextFloat() * 240f)
+            c.balpha = 1f
+            c.basinActive = true
 
             val cx = holeCx(idx)
-            val cy = holeCy(idx) - holeRy * 1.9f
+            val cy = holeCy(idx) - spotRy * 2.6f
             fx.add(Fx(cx, cy, 0f, -dp * 90f, 0.7f, 0.7f, "+$pts", C_GOLD, 0))
-            fx.add(Fx(cx, holeCy(idx), 0f, 0f, 0.4f, 0.4f, null, 0xFFFFD54F.toInt(), 1))
-            repeat(5) {
-                val a = Random.nextFloat() * 6.283f
-                fx.add(
-                    Fx(
-                        cx, cy,
-                        cos(a) * dp * 130f,
-                        sin(a) * dp * 130f - dp * 40f,
-                        0.42f, 0.42f, null, 0xFFFFF3B0.toInt(), 2
-                    )
-                )
-            }
+            fx.add(Fx(cx, holeCy(idx), 0f, 0f, 0.4f, 0.4f, null, 0xFFFFE082.toInt(), 1))
+            fx.add(Fx(cx, cy, 0f, -dp * 40f, 0.85f, 0.85f, "angry", C_ANGRY, 5))
             if (combo >= 3) {
                 fx.add(
                     Fx(
@@ -656,7 +638,7 @@ class GameView(context: Context) : View(context) {
                     )
                 )
             }
-            buzz(16)
+            buzz(18)
             beep(true)
         } else {
             if (combo > 0) combo = 0
@@ -665,7 +647,6 @@ class GameView(context: Context) : View(context) {
         }
     }
 
-    // ------------------------------------------------------------------ 流程
     private fun start() {
         val now = System.currentTimeMillis()
         phase = Phase.PLAYING
@@ -679,7 +660,8 @@ class GameView(context: Context) : View(context) {
         for (c in cells) {
             c.target = 0f
             c.p = 0f
-            c.flash = 0f
+            c.hit = false
+            c.basinActive = false
         }
         fx.clear()
     }
@@ -694,10 +676,9 @@ class GameView(context: Context) : View(context) {
         }
     }
 
-    // ------------------------------------------------------------------ 工具
     private fun holeCx(i: Int): Float = gridLeft + (i % COLS) * cellSize + cellSize / 2f
 
-    private fun holeCy(i: Int): Float = gridTop + (i / COLS) * cellSize + cellSize * 0.62f
+    private fun holeCy(i: Int): Float = gridTop + (i / COLS) * cellSize + cellSize * 0.64f
 
     private fun lerp(a: Float, b: Float, t: Float): Float = a + (b - a) * t
 
@@ -712,7 +693,6 @@ class GameView(context: Context) : View(context) {
         try {
             vib?.vibrate(VibrationEffect.createOneShot(ms, VibrationEffect.DEFAULT_AMPLITUDE))
         } catch (e: Exception) {
-            // 设备无振动器时忽略
         }
     }
 
@@ -725,7 +705,6 @@ class GameView(context: Context) : View(context) {
                 if (hit) 45 else 30
             )
         } catch (e: Exception) {
-            // 部分设备限制音频，忽略
         }
     }
 
@@ -734,7 +713,6 @@ class GameView(context: Context) : View(context) {
         try {
             tone?.release()
         } catch (e: Exception) {
-            // ignore
         }
         tone = null
     }
