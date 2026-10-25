@@ -22,6 +22,7 @@ import android.view.MotionEvent
 import android.view.View
 import kotlin.math.max
 import kotlin.math.min
+import kotlin.math.sin
 import kotlin.random.Random
 
 class GameView(context: Context) : View(context) {
@@ -37,7 +38,8 @@ class GameView(context: Context) : View(context) {
         var stateAt = 0L
         var liveUntil = 0L
         var retreatAt = 0L
-        var basinColor = 0
+        var basinHp = 1
+        var basinShakeAt = 0L
         var p = 0f
     }
 
@@ -49,7 +51,7 @@ class GameView(context: Context) : View(context) {
 
     private class FlyBasin(
         var x: Float, var y: Float, var vx: Float, var vy: Float,
-        var rot: Float, val rotv: Float, val color: Int, val size: Float
+        var rot: Float, val rotv: Float, val size: Float
     )
 
     companion object {
@@ -60,7 +62,9 @@ class GameView(context: Context) : View(context) {
         private const val PREFS = "mole"
         private const val RISE_MS = 190f
         private const val BACK_MS = 150f
-        private const val VIS = 0.80f
+        private const val HEAD_C = 0.285f      // 头心在画布中的位置
+        private const val HEAD_LIFT = 0.640f   // 头心到水面
+        private const val RISE_TRAVEL = 0.95f
     }
 
     private val sp = resources.displayMetrics.density
@@ -85,17 +89,13 @@ class GameView(context: Context) : View(context) {
     private val tmp = RectF()
     private val tmp2 = RectF()
     private val clipPath = Path()
+    private val mat = Matrix()
 
     private val bmpHappy = load(R.drawable.char_happy)
     private val bmpAngry = load(R.drawable.char_angry)
     private val bmpCry = load(R.drawable.char_cry)
     private val bmpDizzy = load(R.drawable.char_dizzy)
-    private val bmpBasin = arrayOf(
-        load(R.drawable.basin_grey),
-        load(R.drawable.basin_red),
-        load(R.drawable.basin_blue),
-        load(R.drawable.basin_green)
-    )
+    private val bmpBasin = load(R.drawable.basin_grey)
     private val faces = arrayOf(bmpHappy, bmpAngry, bmpCry, bmpDizzy)
 
     private fun load(id: Int): Bitmap {
@@ -116,6 +116,8 @@ class GameView(context: Context) : View(context) {
     private var charW = 0f
     private var charH = 0f
     private var cutOff = 0f
+    private var insetTop = 0f
+    private var shadowShader: Shader? = null
     private var skyShader: Shader? = null
     private var seaShader: Shader? = null
     private var sunShader: Shader? = null
@@ -148,21 +150,38 @@ class GameView(context: Context) : View(context) {
     init {
         best = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getInt("best", 0)
         isClickable = true
+        setOnApplyWindowInsetsListener { _, insets ->
+            val t = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                insets.displayCutout?.safeInsetTop ?: 0
+            } else {
+                0
+            }
+            if (t != insetTop.toInt()) {
+                insetTop = t.toFloat()
+                layoutNow()
+                invalidate()
+            }
+            insets
+        }
     }
 
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
         super.onSizeChanged(w, h, oldw, oldh)
-        vw = w.toFloat(); vh = h.toFloat()
+        layoutNow()
+    }
+
+    private fun layoutNow() {
+        vw = width.toFloat(); vh = height.toFloat() - insetTop
         hudH = vh * 0.115f
-        skyH = vh * 0.26f
+        skyH = vh * 0.235f
         cellW = vw / COLS
-        val gTop = vh * 0.335f
+        val gTop = vh * 0.315f
         val avail = vh - gTop - vh * 0.02f
         cellH = min(avail / ROWS, cellW * 1.38f)
         gridTop = gTop + (avail - cellH * ROWS) / 2f
         rx = cellW * 0.45f
         ry = cellW * 0.17f
-        charW = cellW * 0.86f
+        charW = cellW * 0.94f
         charH = charW * bmpHappy.height / bmpHappy.width
         cutOff = ry * 0.05f
 
@@ -179,6 +198,11 @@ class GameView(context: Context) : View(context) {
         sunShader = RadialGradient(
             vw * 0.78f, skyH * 0.42f, vw * 0.30f,
             intArrayOf(0x66FFF3C9, 0x00FFF3C9), null, Shader.TileMode.CLAMP
+        )
+        shadowShader = RadialGradient(
+            0f, 0f, 1f,
+            intArrayOf(0x8C08253C.toInt(), 0x5508253C, 0x0008253C),
+            floatArrayOf(0f, 0.55f, 1f), Shader.TileMode.CLAMP
         )
     }
 
@@ -198,19 +222,22 @@ class GameView(context: Context) : View(context) {
         updateFx()
         updateBasins(dt)
 
+        canvas.save()
+        canvas.translate(0f, insetTop)
         drawSea(canvas)
         drawBoard(canvas)
         drawFx(canvas)
         drawFlyBasins(canvas)
         drawHud(canvas)
         if (phase != Phase.PLAYING) drawOverlay(canvas)
+        canvas.restore()
 
         if (phase != Phase.READY) postInvalidateOnAnimation()
     }
 
     private fun drawSea(canvas: Canvas) {
         pFill.shader = skyShader
-        canvas.drawRect(0f, 0f, vw, skyH, pFill)
+        canvas.drawRect(0f, -insetTop, vw, skyH, pFill)
         pFill.shader = sunShader
         canvas.drawCircle(vw * 0.78f, skyH * 0.42f, vw * 0.30f, pFill)
         pFill.shader = null
@@ -260,24 +287,15 @@ class GameView(context: Context) : View(context) {
             val cx = holeX(i)
             val cy = holeY(i)
 
-            pShadow.color = 0x22001A2E
-            canvas.drawOval(cx - rx * 1.02f, cy - ry + dp(4f), cx + rx * 1.02f, cy + ry + dp(10f), pShadow)
-
-            pFill.color = cPool
-            canvas.drawOval(cx - rx, cy - ry, cx + rx, cy + ry, pFill)
-            tmp.set(cx - rx * 0.94f, cy - ry * 0.86f, cx + rx * 0.94f, cy + ry * 0.80f)
-            pFill.color = cDeep
-            canvas.drawOval(tmp, pFill)
-
-            pFill.color = 0x40CFEFFF
-            tmp.set(cx - rx * 0.92f, cy + ry * 0.10f, cx + rx * 0.92f, cy + ry * 0.92f)
-            canvas.drawOval(tmp, pFill)
-
-            pStroke.style = Paint.Style.STROKE
-            pStroke.color = 0x99CFF0FF.toInt()
-            pStroke.strokeWidth = dp(2.5f)
-            canvas.drawOval(cx - rx + dp(1f), cy - ry + dp(1f), cx + rx - dp(1f), cy + ry - dp(1f), pStroke)
-            pStroke.style = Paint.Style.FILL
+            val sy = cy + ry * 0.30f
+            val hw = rx * 1.30f
+            val hh = ry * 1.75f
+            mat.setScale(hw, hh)
+            mat.postTranslate(cx, sy)
+            shadowShader?.setLocalMatrix(mat)
+            pFill.shader = shadowShader
+            canvas.drawOval(cx - hw, sy - hh, cx + hw, sy + hh, pFill)
+            pFill.shader = null
 
         }
         for (i in 0 until NC) {
@@ -292,8 +310,7 @@ class GameView(context: Context) : View(context) {
         val bmp = faces[c.state.coerceIn(0, 3)]
         val w = charW
         val h = w * bmp.height / bmp.width
-        val visible = h * VIS
-        val topY = cut - visible - (1f - c.p) * visible
+        val topY = cut - h * (HEAD_LIFT + HEAD_C) + (1f - c.p) * h * RISE_TRAVEL
 
         canvas.save()
         clipPath.reset()
@@ -303,11 +320,22 @@ class GameView(context: Context) : View(context) {
         canvas.drawBitmap(bmp, null, tmp2, pImg)
 
         if (c.state == 0) {
-            val bw = w * 0.62f
-            val bh = bw * bmpBasin[0].height / bmpBasin[0].width
-            val by = topY + h * 0.36f
-            tmp2.set(cx - bw / 2f, by - bh, cx + bw / 2f, by)
-            canvas.drawBitmap(bmpBasin[c.basinColor], null, tmp2, pImg)
+            val bw = w * 0.78f
+            val bh = bw * bmpBasin.height / bmpBasin.width
+            val by = topY + h * 0.37f
+            val sk = (nowMs - c.basinShakeAt) / 260f
+            if (sk < 1f) {
+                val amp = 1f - sk
+                canvas.save()
+                canvas.translate(cx + sin(nowMs / 21f) * dp(6f) * amp, by - bh / 2f)
+                canvas.rotate(sin(nowMs / 15f) * 7f * amp)
+                tmp2.set(-bw / 2f, -bh / 2f, bw / 2f, bh / 2f)
+                canvas.drawBitmap(bmpBasin, null, tmp2, pImg)
+                canvas.restore()
+            } else {
+                tmp2.set(cx - bw / 2f, by - bh, cx + bw / 2f, by)
+                canvas.drawBitmap(bmpBasin, null, tmp2, pImg)
+            }
         }
         canvas.restore()
 
@@ -317,7 +345,7 @@ class GameView(context: Context) : View(context) {
 
     private fun drawFlyBasins(canvas: Canvas) {
         for (b in basins) {
-            val bmp = bmpBasin[b.color]
+            val bmp = bmpBasin
             val w = b.size
             val h = w * bmp.height / bmp.width
             canvas.save()
@@ -367,39 +395,42 @@ class GameView(context: Context) : View(context) {
 
     private fun drawHud(canvas: Canvas) {
         pFill.shader = null
-        pFill.color = 0x44FFFFFF
-        tmp.set(0f, 0f, vw, hudH * 0.95f)
-        canvas.drawRoundRect(tmp, hudH * 0.3f, hudH * 0.3f, pFill)
+        pFill.color = 0x3DFFFFFF
+        tmp.set(0f, 0f, vw, hudH * 0.96f)
+        canvas.drawRoundRect(tmp, hudH * 0.28f, hudH * 0.28f, pFill)
 
+        // 分数
         pText.textAlign = Paint.Align.LEFT
-        pText.textSize = hudH * 0.46f
+        pText.textSize = hudH * 0.44f
         pText.color = cInk
         pText.style = Paint.Style.FILL
-        canvas.drawText(score.toString(), vw * 0.075f, hudH * 0.54f, pText)
-
+        canvas.drawText(score.toString(), vw * 0.075f, hudH * 0.58f, pText)
         val sw = pText.measureText(score.toString())
-        pText.textSize = hudH * 0.19f
+        pText.textSize = hudH * 0.18f
         pText.color = cInkSoft
-        canvas.drawText("分", vw * 0.075f + sw + dp(6f), hudH * 0.54f, pText)
+        canvas.drawText("分", vw * 0.075f + sw + dp(5f), hudH * 0.58f, pText)
 
+        // 最高分
+        pText.textAlign = Paint.Align.CENTER
+        pText.textSize = hudH * 0.17f
+        pText.color = cInkSoft
+        canvas.drawText("最高 $best", vw * 0.5f, hudH * 0.33f, pText)
+
+        // 倒计时
         pText.textAlign = Paint.Align.RIGHT
-        pText.textSize = hudH * 0.19f
-        pText.color = cInkSoft
-        canvas.drawText("最高 $best", vw * 0.925f, hudH * 0.30f, pText)
-
         if (phase == Phase.PLAYING) {
             val rem = ((ROUND_MS - (nowMs - startAt)) / 1000f).coerceAtLeast(0f)
-            pText.textSize = hudH * 0.30f
-            pText.color = cInk
+            pText.textSize = hudH * 0.40f
+            pText.color = if (rem <= 5f) cRed else cInk
             canvas.drawText(String.format("%.1f", rem), vw * 0.925f, hudH * 0.58f, pText)
         }
 
         val left = vw * 0.075f
         val right = vw * 0.925f
-        val ty = hudH * 0.72f
+        val ty = hudH * 0.76f
         val th = hudH * 0.13f
         tmp.set(left, ty, right, ty + th)
-        pFill.color = 0x66FFFFFF
+        pFill.color = 0x55FFFFFF
         canvas.drawRoundRect(tmp, th / 2f, th / 2f, pFill)
 
         val ratio = when (phase) {
@@ -416,18 +447,11 @@ class GameView(context: Context) : View(context) {
             tmp.set(left, ty, left + (right - left) * ratio, ty + th)
             canvas.drawRoundRect(tmp, th / 2f, th / 2f, pFill)
         }
-
-        if (combo >= 2 && phase == Phase.PLAYING) {
-            pText.textAlign = Paint.Align.CENTER
-            pText.textSize = hudH * 0.22f
-            pText.color = 0xE6FFD25E.toInt()
-            canvas.drawText("连击 ×$combo", vw * 0.5f, hudH * 0.33f, pText)
-        }
     }
 
     private fun drawOverlay(canvas: Canvas) {
         pFill.color = 0xB3091E2E.toInt()
-        canvas.drawRect(0f, 0f, vw, vh, pFill)
+        canvas.drawRect(0f, -insetTop, vw, vh, pFill)
 
         val pw = vw * 0.78f
         val ph = vh * 0.40f
@@ -447,13 +471,13 @@ class GameView(context: Context) : View(context) {
         if (phase == Phase.READY) {
             pText.textSize = pw * 0.115f
             pText.color = cInk
-            canvas.drawText("打地鼠 · 鲸鱼娘", vw * 0.5f, pt + ph * 0.30f, pText)
+            canvas.drawText("打鲸鲸", vw * 0.5f, pt + ph * 0.30f, pText)
 
             pText.textSize = pw * 0.058f
             pText.color = cInkSoft
-            canvas.drawText("敲三下，把她的铁盆敲下来", vw * 0.5f, pt + ph * 0.44f, pText)
+            canvas.drawText("有的敲一下就掉盆，有的要敲好几下", vw * 0.5f, pt + ph * 0.44f, pText)
             pText.textSize = pw * 0.050f
-            canvas.drawText("铁盆 → 生气 → 哭 → 晕", vw * 0.5f, pt + ph * 0.53f, pText)
+            canvas.drawText("盆掉了：生气 → 哭 → 晕", vw * 0.5f, pt + ph * 0.53f, pText)
 
             btnRect.set(vw * 0.5f - pw * 0.32f, pt + ph * 0.62f, vw * 0.5f + pw * 0.32f, pt + ph * 0.82f)
             pFill.color = cGold
@@ -541,8 +565,10 @@ class GameView(context: Context) : View(context) {
         c.bornAt = nowMs
         c.stateAt = nowMs
         c.retreatAt = 0L
-        c.basinColor = Random.nextInt(bmpBasin.size)
-        c.liveUntil = nowMs + (1500L - min(score * 8L, 520L)).coerceAtLeast(900L)
+        val roll = Random.nextFloat()
+        c.basinHp = if (roll < 0.48f) 1 else if (roll < 0.80f) 2 else 3
+        c.basinShakeAt = 0L
+        c.liveUntil = nowMs + (1500L - min(score * 8L, 520L)).coerceAtLeast(900L) + (c.basinHp - 1) * 460L
         c.p = 0f
         fx.add(Fx(1, holeX(i), holeY(i), 0f, 0f, 520L, nowMs, null, 0, 0f))
     }
@@ -553,11 +579,26 @@ class GameView(context: Context) : View(context) {
         val cy = cutY(i)
         val mult = 1 + min(combo / 5, 3)
 
+        // 铁盆还有血：先砸一下，不掉
+        if (c.state == 0 && c.basinHp > 1) {
+            c.basinHp -= 1
+            c.basinShakeAt = nowMs
+            c.liveUntil = nowMs + 620L
+            val g = 1 * mult
+            score += g
+            combo += 1
+            fx.add(Fx(0, cx, cy - charH * 0.36f, 0f, 0f, 520L, nowMs, "+$g", Color.rgb(214, 236, 250), charW * 0.20f))
+            fx.add(Fx(1, cx, cy - charH * 0.10f, 0f, 0f, 320L, nowMs, null, 0, 0f))
+            buzz(12)
+            beep(760)
+            return
+        }
+
+        // 盆被打飞
         if (c.state == 0) {
-            val bw = charW * 0.62f
-            val bmp = bmpBasin[c.basinColor]
-            val bh = bw * bmp.height / bmp.width
-            val baseTop = cutY(i) - charH * VIS + (1f - c.p) * charH * VIS
+            val bw = charW * 0.78f
+            val bh = bw * bmpBasin.height / bmpBasin.width
+            val baseTop = cutY(i) - charH * (HEAD_LIFT + HEAD_C) + (1f - c.p) * charH * RISE_TRAVEL
             val by = baseTop + charH * 0.36f - bh / 2f
             val dir = if (Random.nextBoolean()) 1f else -1f
             basins.add(
@@ -567,7 +608,6 @@ class GameView(context: Context) : View(context) {
                     -dp(420f + Random.nextFloat() * 160f),
                     0f,
                     dir * (300f + Random.nextFloat() * 260f),
-                    c.basinColor,
                     bw
                 )
             )
@@ -583,7 +623,7 @@ class GameView(context: Context) : View(context) {
         }
 
         val gained = when (c.state) {
-            0 -> 1 * mult
+            0 -> 2 * mult
             1 -> 2 * mult
             2 -> 3 * mult
             else -> 1
@@ -599,8 +639,8 @@ class GameView(context: Context) : View(context) {
 
         c.stateAt = nowMs
         when (c.state) {
-            0 -> { c.state = 1; c.liveUntil = nowMs + 780L; beep(880) }
-            1 -> { c.state = 2; c.liveUntil = nowMs + 780L; beep(1080) }
+            0 -> { c.state = 1; c.liveUntil = nowMs + 800L; beep(880) }
+            1 -> { c.state = 2; c.liveUntil = nowMs + 800L; beep(1080) }
             2 -> { c.state = 3; c.liveUntil = nowMs + 900L; beep(1300) }
             else -> { c.retreatAt = nowMs; beep(1600) }
         }
@@ -637,7 +677,7 @@ class GameView(context: Context) : View(context) {
     override fun onTouchEvent(e: MotionEvent): Boolean {
         if (e.action != MotionEvent.ACTION_DOWN) return true
         val x = e.x
-        val y = e.y
+        val y = e.y - insetTop
 
         if (phase != Phase.PLAYING) {
             if (btnRect.contains(x, y)) start()
@@ -651,7 +691,7 @@ class GameView(context: Context) : View(context) {
             if (!c.active || c.p < 0.35f) continue
             val cx = holeX(i)
             val cut = cutY(i)
-            val topY = cut - charH * VIS
+            val topY = cut - charH * (HEAD_LIFT + HEAD_C)
             if (x < cx - charW * 0.47f || x > cx + charW * 0.47f) continue
             if (y < topY || y > cut + ry * 0.4f) continue
             val d = kotlin.math.abs(y - (topY + cut) / 2f)
