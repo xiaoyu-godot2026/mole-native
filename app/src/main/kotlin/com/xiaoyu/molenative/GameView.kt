@@ -22,6 +22,7 @@ import android.os.Vibrator
 import android.provider.OpenableColumns
 import android.view.MotionEvent
 import android.view.View
+import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
@@ -37,19 +38,21 @@ class GameView(context: Context) : View(context) {
 
     private class Cell {
         var active = false
-        var state = 0
+        var state = 0          // 0 在场(有盆) / 2 漏了正在沉 / 3 被打晕
+        var p = 0f             // 露出进度 0..1
+        var hit0 = 0L          // 第一拍判定时刻（歌曲时间）
+        var hitsTotal = 1      // 总共要敲几拍
+        var basinHp = 0        // 还剩几拍没敲
+        var basinColor = 0     // 0 银 / 1 蓝 / 2 绿
+        var basinShakeAt = 0L
+        var face = 0           // 0 开心 1 生气 2 哭 3 晕
+        var dieAt = 0L
+        var dizzySfx = false
+        var retreatAt = 0L
         var bornAt = 0L
         var stateAt = 0L
-        var liveUntil = 0L
-        var retreatAt = 0L
-        var basinHp = 1
-        var basinColor = 0
-        var basinShakeAt = 0L
         var lastHitAt = 0L
-        var face = 0        // 0开心 1生气 2哭 3晕（锁定）
-        var dieAt = 0L      // 被打飞的时间点
-        var dizzySfx = false
-        var p = 0f
+        var liveUntil = 0L
     }
 
     private class Fx(
@@ -66,9 +69,9 @@ class GameView(context: Context) : View(context) {
     companion object {
         private const val COLS = 3
         private const val ROWS = 3
-        private const val SCORE_SILVER = 1      // 银盆基础分
-        private const val SCORE_BLUE = 3        // 蓝盆基础分
-        private const val SCORE_GREEN = 5       // 绿盆基础分
+        private const val SCORE_SILVER = 10     // 银盆基础分（敲 1 拍）
+        private const val SCORE_BLUE = 30       // 蓝盆基础分（连敲 3 拍）
+        private const val SCORE_GREEN = 50      // 绿盆基础分（连敲 2 拍）
         private const val DEATH_SHOW_MS = 340L  // 盆飞走后先露出原表情
         private const val DEATH_DIZZY_MS = 620L // 晕 + 左右晃两下
         private const val NC = COLS * ROWS
@@ -79,6 +82,13 @@ class GameView(context: Context) : View(context) {
         private const val HEAD_C = 0.285f      // 头心在画布中的位置
         private const val HEAD_LIFT = 0.640f   // 头心到水面
         private const val RISE_TRAVEL = 0.95f
+
+        private const val LEAD_MS = 460L        // 提前多久冒头
+        private const val SETTLE_MS = 70L       // 提前到位
+        private const val W_PERFECT = 85L       // Perfect 窗口
+        private const val W_GOOD = 165L         // Good 窗口
+        private const val MISS_PENALTY = 4
+        private const val START_SKIP_MS = 1200L
     }
 
     private val sp = resources.displayMetrics.density
@@ -154,6 +164,21 @@ class GameView(context: Context) : View(context) {
     private var lastFrame = 0L
     private var btnRect = RectF()
 
+    // ---------------- 节奏 ----------------
+    private var map: BeatMap? = null
+    private var analyzing = false
+    private var mapErr = ""
+    private var nextBeat = 0
+    private var lastCell = -1
+    private var judgeOffset = 0
+    private var maxCombo = 0
+    private var perfectCount = 0
+    private var goodCount = 0
+    private var missCount = 0
+    private var notesTotal = 0
+    private var lastSongPos = -1L
+    private var gameStartAt = 0L
+
     private val bubbles = Array(26) {
         floatArrayOf(
             Random.nextFloat(), Random.nextFloat(), 0.4f + Random.nextFloat() * 0.9f, 6f + Random.nextFloat() * 16f
@@ -173,10 +198,14 @@ class GameView(context: Context) : View(context) {
     private val btnResetBgm = RectF()
     private val btnVib = RectF()
     private val btnCloseSet = RectF()
+    private val sldOffTrack = RectF()
+    private val sldOffHit = RectF()
 
     init {
         best = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getInt("best", 0)
+        judgeOffset = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getInt("judgeOffset", 0)
         isClickable = true
+        ensureMap()
         setOnApplyWindowInsetsListener { _, insets ->
             val t = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
                 insets.displayCutout?.safeInsetTop ?: 0
@@ -264,34 +293,19 @@ class GameView(context: Context) : View(context) {
     }
 
     private fun drawFrame(canvas: Canvas) {
-        nowMs = System.currentTimeMillis()
-        val dt = if (lastFrame == 0L) 0f else min(48L, nowMs - lastFrame).toFloat()
-        lastFrame = nowMs
-
         if (phase == Phase.PLAYING) {
-            if (showSettings) {
-                // 打开设置时把整局游戏的时间戳一起推后 = 暂停
-                val d = dt.toLong()
-                if (d > 0L) {
-                    startAt += d
-                    nextSpawnAt += d
-                    for (c in cells) {
-                        if (!c.active) continue
-                        c.bornAt += d
-                        c.stateAt += d
-                        c.liveUntil += d
-                        if (c.retreatAt != 0L) c.retreatAt += d
-                        if (c.dieAt != 0L) c.dieAt += d
-                        if (c.basinShakeAt != 0L) c.basinShakeAt += d
-                        if (c.lastHitAt != 0L) c.lastHitAt += d
-                    }
-                    for (f in fx) f.t0 += d
-                }
-            } else {
-                tick()
-                if (nowMs - startAt >= ROUND_MS) gameOver()
+            if (!showSettings) {
+                nowMs = songPos()
+                val m = map
+                if (m != null && nowMs >= m.durationMs) gameOver() else tick()
             }
+        } else {
+            nowMs = System.currentTimeMillis()
         }
+        val wall = System.currentTimeMillis()
+        val dt = if (lastFrame == 0L) 0f else min(48L, wall - lastFrame).toFloat()
+        lastFrame = wall
+
         updateFx()
         if (!showSettings) updateBasins(dt)
 
@@ -525,46 +539,43 @@ class GameView(context: Context) : View(context) {
         pText.textAlign = Paint.Align.CENTER
         pText.textSize = hudH * 0.17f
         pText.color = cInkSoft
-        canvas.drawText("最高 $best", vw * 0.5f, hudH * 0.33f, pText)
+        canvas.drawText("最高 $best", vw * 0.5f, hudH * 0.31f, pText)
 
         // 连击
-        if (phase == Phase.PLAYING && combo >= 3) {
+        if (phase == Phase.PLAYING && combo >= 2) {
             pText.textAlign = Paint.Align.CENTER
-            pText.textSize = hudH * 0.21f
+            pText.textSize = hudH * 0.23f
             pText.color = cGold
-            canvas.drawText("连击 ×$combo", vw * 0.5f, hudH * 0.62f, pText)
+            canvas.drawText("连击 ×$combo", vw * 0.5f, hudH * 0.64f, pText)
         }
 
-        // 倒计时
-        pText.textAlign = Paint.Align.RIGHT
+        // 准确率
         if (phase == Phase.PLAYING) {
-            val rem = ((ROUND_MS - (nowMs - startAt)) / 1000f).coerceAtLeast(0f)
-            pText.textSize = hudH * 0.40f
-            pText.color = if (rem <= 5f) cRed else cInk
-            canvas.drawText(String.format("%.1f", rem), vw * 0.925f, hudH * 0.58f, pText)
+            pText.textAlign = Paint.Align.RIGHT
+            pText.textSize = hudH * 0.20f
+            pText.color = cInkSoft
+            val acc = if (notesTotal > 0) (perfectCount * 100f / notesTotal).roundToInt().toString() + "%" else "--"
+            canvas.drawText(acc, vw * 0.845f, hudH * 0.44f, pText)
         }
 
+        // 歌曲进度
         val left = vw * 0.075f
         val right = vw * 0.925f
-        val ty = hudH * 0.76f
-        val th = hudH * 0.13f
-        tmp.set(left, ty, right, ty + th)
+        val ty2 = hudH * 0.76f
+        val th2 = hudH * 0.13f
+        tmp.set(left, ty2, right, ty2 + th2)
         pFill.color = 0x55FFFFFF
-        canvas.drawRoundRect(tmp, th / 2f, th / 2f, pFill)
-
+        canvas.drawRoundRect(tmp, th2 / 2f, th2 / 2f, pFill)
+        val dur = (map?.durationMs ?: 1L).coerceAtLeast(1L)
         val ratio = when (phase) {
-            Phase.PLAYING -> (1f - (nowMs - startAt).toFloat() / ROUND_MS).coerceIn(0f, 1f)
-            Phase.OVER -> 0f
-            else -> 1f
+            Phase.PLAYING -> (nowMs.toFloat() / dur).coerceIn(0f, 1f)
+            Phase.OVER -> 1f
+            else -> 0f
         }
         if (ratio > 0f) {
-            pFill.color = when {
-                ratio > 0.5f -> cGreen
-                ratio > 0.22f -> cGold
-                else -> cRed
-            }
-            tmp.set(left, ty, left + (right - left) * ratio, ty + th)
-            canvas.drawRoundRect(tmp, th / 2f, th / 2f, pFill)
+            pFill.color = cGreen
+            tmp.set(left, ty2, left + (right - left) * ratio, ty2 + th2)
+            canvas.drawRoundRect(tmp, th2 / 2f, th2 / 2f, pFill)
         }
 
         // 声音设置入口（右上角）
@@ -593,29 +604,32 @@ class GameView(context: Context) : View(context) {
 
     private fun layoutSettings() {
         val pw = vw * 0.86f
-        val ph = min(pw * 1.26f, vh * 0.66f)
+        val ph = min(pw * 1.32f, vh * 0.74f)
         panel.set((vw - pw) / 2f, (vh - ph) / 2f, (vw + pw) / 2f, (vh + ph) / 2f)
 
         val l = panel.left + pw * 0.07f
         val r = panel.right - pw * 0.07f
-        val trackL = l + pw * 0.15f
-        val trackR = r - pw * 0.17f
+        val trackL = l + pw * 0.22f
+        val trackR = r - pw * 0.22f
 
-        val y1 = panel.top + ph * 0.24f
-        val y2 = panel.top + ph * 0.35f
+        val y1 = panel.top + ph * 0.215f
+        val y2 = panel.top + ph * 0.305f
+        val y3 = panel.top + ph * 0.395f
         sldSfxTrack.set(trackL, y1, trackR, y1)
         sldBgmTrack.set(trackL, y2, trackR, y2)
-        val ht = ph * 0.034f
-        sldSfxHit.set(trackL - ht, y1 - ht * 1.6f, trackR + ht, y1 + ht * 1.6f)
-        sldBgmHit.set(trackL - ht, y2 - ht * 1.6f, trackR + ht, y2 + ht * 1.6f)
+        sldOffTrack.set(trackL, y3, trackR, y3)
+        val ht = ph * 0.032f
+        sldSfxHit.set(trackL - ht, y1 - ht * 1.5f, trackR + ht, y1 + ht * 1.5f)
+        sldBgmHit.set(trackL - ht, y2 - ht * 1.5f, trackR + ht, y2 + ht * 1.5f)
+        sldOffHit.set(trackL - ht, y3 - ht * 1.5f, trackR + ht, y3 + ht * 1.5f)
 
-        val bh = ph * 0.098f
-        btnPickBgm.set(l, panel.top + ph * 0.455f, r, panel.top + ph * 0.455f + bh)
+        val bh = ph * 0.090f
+        btnPickBgm.set(l, panel.top + ph * 0.535f, r, panel.top + ph * 0.535f + bh)
         val gap = pw * 0.045f
         val half = (r - l - gap) / 2f
-        btnResetBgm.set(l, panel.top + ph * 0.655f, l + half, panel.top + ph * 0.655f + bh)
-        btnVib.set(l + half + gap, panel.top + ph * 0.655f, r, panel.top + ph * 0.655f + bh)
-        btnCloseSet.set(l, panel.bottom - ph * 0.145f, r, panel.bottom - ph * 0.045f)
+        btnResetBgm.set(l, panel.top + ph * 0.725f, l + half, panel.top + ph * 0.725f + bh)
+        btnVib.set(l + half + gap, panel.top + ph * 0.725f, r, panel.top + ph * 0.725f + bh)
+        btnCloseSet.set(l, panel.bottom - ph * 0.135f, r, panel.bottom - ph * 0.045f)
     }
 
     private fun drawSettings(canvas: Canvas) {
@@ -634,32 +648,36 @@ class GameView(context: Context) : View(context) {
 
         pText.style = Paint.Style.FILL
         pText.textAlign = Paint.Align.CENTER
-        pText.textSize = ph * 0.072f
+        pText.textSize = ph * 0.066f
         pText.color = cInk
-        canvas.drawText("声音设置", panel.centerX(), panel.top + ph * 0.115f, pText)
+        canvas.drawText("声音与判定", panel.centerX(), panel.top + ph * 0.105f, pText)
 
-        val th = ph * 0.021f
-        val knob = ph * 0.029f
-        val labels = arrayOf("音效", "音乐")
-        val tracks = arrayOf(sldSfxTrack, sldBgmTrack)
-        val vols = arrayOf(audio.sfxVol, audio.bgmVol)
-        for (k in 0..1) {
+        val th = ph * 0.019f
+        val knob = ph * 0.026f
+        val labels = arrayOf("音效", "音乐", "判定偏移")
+        val tracks = arrayOf(sldSfxTrack, sldBgmTrack, sldOffTrack)
+        val vals = floatArrayOf(audio.sfxVol, audio.bgmVol, (judgeOffset + 200) / 400f)
+        val txts = arrayOf(
+            (audio.sfxVol * 100).roundToInt().toString() + "%",
+            (audio.bgmVol * 100).roundToInt().toString() + "%",
+            (if (judgeOffset >= 0) "+" else "") + judgeOffset + "ms"
+        )
+        for (k in 0..2) {
             val tr = tracks[k]
-            val v = vols[k]
+            val v = vals[k].coerceIn(0f, 1f)
             pText.textAlign = Paint.Align.LEFT
-            pText.textSize = ph * 0.050f
+            pText.textSize = ph * 0.040f
             pText.color = cInk
-            canvas.drawText(labels[k], l, tr.centerY() + ph * 0.018f, pText)
+            canvas.drawText(labels[k], l, tr.centerY() + ph * 0.014f, pText)
 
             pText.textAlign = Paint.Align.RIGHT
-            pText.textSize = ph * 0.044f
+            pText.textSize = ph * 0.036f
             pText.color = cInkSoft
-            canvas.drawText("${(v * 100).roundToInt()}%", r, tr.centerY() + ph * 0.016f, pText)
+            canvas.drawText(txts[k], r, tr.centerY() + ph * 0.013f, pText)
 
             tmp.set(tr.left, tr.centerY() - th / 2f, tr.right, tr.centerY() + th / 2f)
             pFill.color = 0x241E4C6E
             canvas.drawRoundRect(tmp, th / 2f, th / 2f, pFill)
-
             val kx = tr.left + tr.width() * v
             if (kx > tr.left + 1f) {
                 tmp.set(tr.left, tr.centerY() - th / 2f, kx, tr.centerY() + th / 2f)
@@ -669,17 +687,19 @@ class GameView(context: Context) : View(context) {
             pFill.color = Color.WHITE
             canvas.drawCircle(kx, tr.centerY(), knob, pFill)
             pStroke.color = cInk
-            pStroke.strokeWidth = max(dp(1.7f), ph * 0.007f)
+            pStroke.strokeWidth = max(dp(1.7f), ph * 0.006f)
             canvas.drawCircle(kx, tr.centerY(), knob, pStroke)
         }
 
         button(canvas, btnPickBgm, "更换背景音乐", false)
         pText.textAlign = Paint.Align.CENTER
-        pText.textSize = ph * 0.040f
+        pText.textSize = ph * 0.036f
         pText.color = cInkSoft
         val nm = audio.bgmName
-        canvas.drawText("当前：" + if (nm.length > 18) nm.substring(0, 18) + "…" else nm,
-            panel.centerX(), panel.top + ph * 0.615f, pText)
+        canvas.drawText("当前：" + if (nm.length > 16) nm.substring(0, 16) + "…" else nm,
+            panel.centerX(), panel.top + ph * 0.672f, pText)
+        pText.textSize = ph * 0.030f
+        canvas.drawText("判定偏移：敲早了就往正调，敲晚了往负调", panel.centerX(), panel.top + ph * 0.845f, pText)
 
         button(canvas, btnResetBgm, "恢复内置", !audio.bgmCustom)
         button(canvas, btnVib, if (audio.vibOn) "震动 开" else "震动 关", audio.vibOn)
@@ -709,6 +729,10 @@ class GameView(context: Context) : View(context) {
                         dragSld = 1
                         setSld(1, x)
                     }
+                    sldOffHit.contains(x, y) -> {
+                        dragSld = 2
+                        setSld(2, x)
+                    }
                     btnPickBgm.contains(x, y) -> {
                         dragSld = -1
                         pickBgm()
@@ -716,7 +740,7 @@ class GameView(context: Context) : View(context) {
                     btnResetBgm.contains(x, y) -> {
                         dragSld = -1
                         audio.clearBgm()
-                        audio.startBgm()
+                        refreshMap()
                     }
                     btnVib.contains(x, y) -> {
                         dragSld = -1
@@ -740,6 +764,7 @@ class GameView(context: Context) : View(context) {
                 if (dragSld == 0) audio.play(GameAudio.HIT2, 1f, 0.75f)
                 if (dragSld == 1) audio.startBgm()
                 if (dragSld >= 0) audio.saveVolumes()
+                if (dragSld == 2) saveOffset()
                 dragSld = -1
                 invalidate()
             }
@@ -747,15 +772,32 @@ class GameView(context: Context) : View(context) {
     }
 
     private fun setSld(which: Int, x: Float) {
-        val t = if (which == 0) sldSfxTrack else sldBgmTrack
+        val t = when (which) {
+            0 -> sldSfxTrack
+            1 -> sldBgmTrack
+            else -> sldOffTrack
+        }
         val v = ((x - t.left) / max(1f, t.width())).coerceIn(0f, 1f)
-        if (which == 0) audio.sfxVol = v else audio.bgmVol = v
+        when (which) {
+            0 -> audio.sfxVol = v
+            1 -> audio.bgmVol = v
+            else -> judgeOffset = (v * 400f - 200f).roundToInt()
+        }
+    }
+
+    private fun saveOffset() {
+        try {
+            ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putInt("judgeOffset", judgeOffset).apply()
+        } catch (t: Throwable) {
+        }
     }
 
     private fun closeSettings() {
         showSettings = false
         dragSld = -1
         audio.saveVolumes()
+        saveOffset()
+        audio.resumeBgm()
         lastFrame = 0L
     }
 
@@ -776,8 +818,8 @@ class GameView(context: Context) : View(context) {
         pFill.color = 0xB3091E2E.toInt()
         canvas.drawRect(0f, -insetTop, vw, vh, pFill)
 
-        val pw = vw * 0.78f
-        val ph = vh * 0.40f
+        val pw = vw * 0.80f
+        val ph = vh * 0.46f
         val pl = (vw - pw) / 2f
         val pt = (vh - ph) / 2f
 
@@ -792,41 +834,58 @@ class GameView(context: Context) : View(context) {
         pText.textAlign = Paint.Align.CENTER
         pText.style = Paint.Style.FILL
         if (phase == Phase.READY) {
-            pText.textSize = pw * 0.115f
+            pText.textSize = pw * 0.118f
             pText.color = cInk
-            canvas.drawText("打鲸鲸", vw * 0.5f, pt + ph * 0.30f, pText)
+            canvas.drawText("打鲸鲸", vw * 0.5f, pt + ph * 0.185f, pText)
 
-            pText.textSize = pw * 0.058f
-            pText.color = cInkSoft
-            canvas.drawText("有的敲一下就掉盆，有的要敲好几下", vw * 0.5f, pt + ph * 0.44f, pText)
             pText.textSize = pw * 0.050f
-            canvas.drawText("盆掉了：生气 → 哭 → 晕", vw * 0.5f, pt + ph * 0.53f, pText)
+            pText.color = cInkSoft
+            canvas.drawText("跟着音乐，鼓点到了就敲", vw * 0.5f, pt + ph * 0.285f, pText)
+            canvas.drawText("盆的颜色＝要连敲几下： 银1  绿2  蓝3", vw * 0.5f, pt + ph * 0.355f, pText)
 
-            btnRect.set(vw * 0.5f - pw * 0.32f, pt + ph * 0.62f, vw * 0.5f + pw * 0.32f, pt + ph * 0.82f)
-            pFill.color = cGold
+            val m = map
+            pText.textSize = pw * 0.044f
+            if (m != null) {
+                pText.color = cInkSoft
+                canvas.drawText(
+                    "本曲 " + (m.bpm + 0.5).toInt() + " BPM · " + (m.durationMs / 1000) + " 秒 · " + m.count + " 个拍点",
+                    vw * 0.5f, pt + ph * 0.425f, pText
+                )
+            } else {
+                pText.color = cRed
+                canvas.drawText(if (analyzing) "正在分析音乐节拍…" else "音乐分析失败：" + mapErr, vw * 0.5f, pt + ph * 0.425f, pText)
+            }
+
+            btnRect.set(vw * 0.5f - pw * 0.32f, pt + ph * 0.54f, vw * 0.5f + pw * 0.32f, pt + ph * 0.74f)
+            pFill.color = if (map == null) 0xFFBFCBD6.toInt() else cGold
             canvas.drawRoundRect(btnRect, btnRect.height() / 2f, btnRect.height() / 2f, pFill)
             pText.textSize = btnRect.height() * 0.46f
             pText.color = Color.rgb(92, 60, 5)
-            canvas.drawText("开 始", btnRect.centerX(), btnRect.centerY() + btnRect.height() * 0.17f, pText)
+            canvas.drawText(if (map == null) "分析中…" else "开 始", btnRect.centerX(), btnRect.centerY() + btnRect.height() * 0.17f, pText)
 
-            pText.textSize = pw * 0.048f
+            pText.textSize = pw * 0.046f
             pText.color = cInkSoft
             canvas.drawText("最高 $best 分", vw * 0.5f, pt + ph * 0.93f, pText)
         } else {
-            pText.textSize = pw * 0.105f
+            pText.textSize = pw * 0.100f
             pText.color = cInk
-            canvas.drawText("时间到", vw * 0.5f, pt + ph * 0.24f, pText)
+            canvas.drawText("完 成", vw * 0.5f, pt + ph * 0.165f, pText)
 
-            pText.textSize = pw * 0.22f
+            pText.textSize = pw * 0.205f
             pText.color = Color.rgb(28, 122, 190)
-            canvas.drawText(score.toString(), vw * 0.5f, pt + ph * 0.50f, pText)
+            canvas.drawText(score.toString(), vw * 0.5f, pt + ph * 0.395f, pText)
 
-            pText.textSize = pw * 0.052f
+            val acc = if (notesTotal > 0) (perfectCount * 100f / notesTotal).roundToInt() else 0
+            pText.textSize = pw * 0.045f
             pText.color = cInkSoft
-            val tip = if (score >= best && score > 0) "新纪录！" else "最高 $best"
-            canvas.drawText(tip, vw * 0.5f, pt + ph * 0.59f, pText)
+            canvas.drawText("精准 $perfectCount · 良好 $goodCount · 漏 $missCount · 准确率 $acc%", vw * 0.5f, pt + ph * 0.485f, pText)
+            canvas.drawText("最大连击 ×$maxCombo", vw * 0.5f, pt + ph * 0.545f, pText)
 
-            btnRect.set(vw * 0.5f - pw * 0.34f, pt + ph * 0.66f, vw * 0.5f + pw * 0.34f, pt + ph * 0.86f)
+            pText.textSize = pw * 0.050f
+            val tip = if (score >= best && score > 0) "新纪录！" else "最高 $best"
+            canvas.drawText(tip, vw * 0.5f, pt + ph * 0.625f, pText)
+
+            btnRect.set(vw * 0.5f - pw * 0.34f, pt + ph * 0.71f, vw * 0.5f + pw * 0.34f, pt + ph * 0.89f)
             pFill.color = cGold
             canvas.drawRoundRect(btnRect, btnRect.height() / 2f, btnRect.height() / 2f, pFill)
             pText.textSize = btnRect.height() * 0.44f
@@ -836,37 +895,51 @@ class GameView(context: Context) : View(context) {
     }
 
     private fun tick() {
+        val m = map ?: return
+        val now = nowMs
+
+        // 按拍点往前排怪
+        while (nextBeat < m.count) {
+            val t = m.time(nextBeat) + judgeOffset
+            if (t - LEAD_MS > now) break
+            scheduleBeat(nextBeat, m)
+        }
+
         for (i in 0 until NC) {
             val c = cells[i]
             if (!c.active) continue
-            if (c.retreatAt == 0L && nowMs >= c.liveUntil) {
-                c.retreatAt = nowMs
-                if (c.state < 3) combo = 0
-            }
-            c.p = if (c.retreatAt > 0L) {
-                val k = ((nowMs - c.retreatAt) / BACK_MS).coerceIn(0f, 1f)
-                1f - k * k
+            if (c.retreatAt == 0L) {
+                val t0 = c.hit0 - LEAD_MS
+                val t1 = c.hit0 - SETTLE_MS
+                c.p = when {
+                    now >= t1 -> 1f
+                    now <= t0 -> 0f
+                    else -> easeOutBack(((now - t0).toFloat() / (t1 - t0).toFloat()).coerceIn(0f, 1f))
+                }
+                if (c.state == 0 && c.basinHp > 0 && now > nextJudge(c) + W_GOOD) {
+                    missNote(i)
+                    continue
+                }
+                if (c.state == 3) {
+                    if (!c.dizzySfx && now - c.dieAt >= DEATH_SHOW_MS) {
+                        c.dizzySfx = true
+                        audio.play(GameAudio.DIZZY, 1f, 0.8f)
+                    }
+                    if (now - c.dieAt >= DEATH_SHOW_MS + DEATH_DIZZY_MS) c.retreatAt = now
+                }
             } else {
-                val k = ((nowMs - c.bornAt) / RISE_MS).coerceIn(0f, 1f)
-                easeOutBack(k)
+                val k = ((now - c.retreatAt).toFloat() / BACK_MS).coerceIn(0f, 1f)
+                c.p = 1f - k * k
+                if (now - c.retreatAt >= BACK_MS) {
+                    c.active = false
+                    c.p = 0f
+                    c.retreatAt = 0L
+                    c.state = 0
+                    c.dieAt = 0L
+                    c.dizzySfx = false
+                    c.basinHp = 0
+                }
             }
-            if (c.retreatAt > 0L && nowMs - c.retreatAt >= BACK_MS) {
-                c.active = false
-                c.p = 0f
-                c.retreatAt = 0L
-                c.state = 0
-                c.dieAt = 0L
-                c.dizzySfx = false
-            } else if (c.state == 3 && !c.dizzySfx && nowMs - c.dieAt >= DEATH_SHOW_MS) {
-                c.dizzySfx = true
-                audio.play(GameAudio.DIZZY, 1f, 0.85f)
-            }
-        }
-
-        if (nowMs >= nextSpawnAt) {
-            spawn()
-            val iv = max(360f, 830f - score * 11f)
-            nextSpawnAt = nowMs + iv.toLong() + (Random.nextFloat() * 180f).toLong()
         }
     }
 
@@ -877,129 +950,178 @@ class GameView(context: Context) : View(context) {
         return 1f + c3 * t * t * t + c1 * t * t
     }
 
-    private fun spawn() {
-        var count = 0
-        for (c in cells) if (c.active) count++
-        if (count >= 3) return
+    private fun hash(k: Int): Float {
+        var x = k * -1640531535
+        x = x xor (x ushr 13)
+        x *= -2048144789
+        x = x xor (x ushr 16)
+        return ((x ushr 8) and 0xFFFF) / 65536f
+    }
 
+    private fun nextJudge(c: Cell): Long {
+        val per = map?.periodMs ?: 500.0
+        return c.hit0 + ((c.hitsTotal - c.basinHp) * per).toLong()
+    }
+
+    private fun pickCell(k: Int): Int {
         val free = ArrayList<Int>()
         for (i in 0 until NC) if (!cells[i].active) free.add(i)
-        if (free.isEmpty()) return
+        if (free.isEmpty()) return -1
+        if (lastCell >= 0 && free.size > 1) {
+            val col = lastCell % COLS
+            val alt = ArrayList<Int>()
+            for (i in free) if (i % COLS != col) alt.add(i)
+            if (alt.isNotEmpty()) {
+                val idx = (hash(k + 37) * alt.size).toInt().coerceIn(0, alt.size - 1)
+                lastCell = alt[idx]
+                return lastCell
+            }
+        }
+        val idx = (hash(k + 37) * free.size).toInt().coerceIn(0, free.size - 1)
+        lastCell = free[idx]
+        return lastCell
+    }
 
-        val i = free[Random.nextInt(free.size)]
-        val c = cells[i]
+    private fun scheduleBeat(k: Int, m: BeatMap) {
+        val e = m.energyAt(k)
+        val strong = e > 165
+        val mid = e > 95
+        var place = if (mid) true else (k % 2 == 0)
+        if (hash(k) < 0.10f) place = false
+        if (!place) {
+            nextBeat = k + 1
+            return
+        }
+        var hits = 1
+        val h = hash(k + 991)
+        if (strong) {
+            if (h > 0.90f) hits = 3 else if (h > 0.72f) hits = 2
+        } else if (mid && h > 0.92f) {
+            hits = 2
+        }
+        if (k + hits > m.count) hits = 1
+        val idx = pickCell(k)
+        if (idx < 0) {
+            nextBeat = k + 1
+            return
+        }
+        val c = cells[idx]
+        val t0 = m.time(k) + judgeOffset
         c.active = true
         c.state = 0
-        c.bornAt = nowMs
-        c.stateAt = nowMs
-        c.retreatAt = 0L
-        // 只有三档：银(1下) / 蓝(2下) / 绿(3下)
-        val roll = Random.nextFloat()
-        c.basinColor = when {
-            roll < 0.50f -> 0
-            roll < 0.80f -> 1
-            else -> 2
-        }
-        c.basinHp = when (c.basinColor) {
-            1 -> 3      // 蓝：敲 3 下
-            2 -> 2      // 绿：敲 2 下
-            else -> 1   // 银：敲 1 下
-        }
         c.face = 0
         c.dieAt = 0L
         c.dizzySfx = false
         c.basinShakeAt = 0L
-        c.lastHitAt = 0L
-        c.liveUntil = nowMs + (1500L - min(score * 8L, 520L)).coerceAtLeast(900L) + (c.basinHp - 1) * 460L
-        c.p = 0f
-        fx.add(Fx(1, holeX(i), holeY(i), 0f, 0f, 520L, nowMs, null, 0, 0f))
-    }
-
-    private fun hit(i: Int) {
-        val c = cells[i]
-        val cx = holeX(i)
-        val cy = cutY(i)
-
-        // 已经晕倒：状态锁死，再按既不换脸也不加分
-        if (c.state >= 3) return
-
-        // 铁盆还有血：砸一下不掉，表情凶一层
-        if (c.basinHp > 1) {
-            c.basinHp -= 1
-            c.face = min(c.face + 1, 2)
-            c.basinShakeAt = nowMs
-            c.lastHitAt = nowMs
-            c.liveUntil = max(c.liveUntil, nowMs + 520L)
-            val g = gain(c)
-            fx.add(Fx(0, cx, cy - charH * 0.36f, 0f, 0f, 520L, nowMs, "+$g", Color.rgb(214, 236, 250), charW * 0.20f))
-            fx.add(Fx(1, cx, cy - charH * 0.10f, 0f, 0f, 320L, nowMs, null, 0, 0f))
-            buzz(12)
-            audio.play(if (c.basinHp >= 2) GameAudio.HIT1 else GameAudio.HIT2)
-            return
+        c.retreatAt = 0L
+        c.basinHp = hits
+        c.hitsTotal = hits
+        c.hit0 = t0.toLong()
+        c.basinColor = when (hits) {
+            3 -> 1
+            2 -> 2
+            else -> 0
         }
-
-        // 最后一下：盆被打飞
-        val bw = charW * 0.78f
-        val bh = bw * bmpBasins[c.basinColor].height / bmpBasins[c.basinColor].width
-        val baseTop = cutY(i) - charH * (HEAD_LIFT + HEAD_C) + (1f - c.p) * charH * RISE_TRAVEL
-        val by = baseTop + charH * 0.37f - bh / 2f
-        val dir = if (Random.nextBoolean()) 1f else -1f
-        basins.add(
-            FlyBasin(
-                cx, by,
-                dir * dp(90f + Random.nextFloat() * 130f),
-                -dp(420f + Random.nextFloat() * 160f),
-                0f,
-                dir * (300f + Random.nextFloat() * 260f),
-                bw,
-                c.basinColor
-            )
-        )
-        for (k in 0 until 3) {
-            fx.add(
-                Fx(
-                    2, cx + (Random.nextFloat() - 0.5f) * charW * 0.5f, by,
-                    (Random.nextFloat() - 0.5f) * dp(80f), -dp(40f + Random.nextFloat() * 60f),
-                    380L, nowMs, null, 0, dp(3f + Random.nextFloat() * 3f)
-                )
-            )
-        }
-
-        val g = gain(c)
-        fx.add(Fx(0, cx, cy - charH * 0.30f, 0f, 0f, 700L, nowMs, "+$g", Color.rgb(255, 214, 102), charW * 0.26f))
-        fx.add(Fx(1, cx, cy, 0f, 0f, 380L, nowMs, null, 0, 0f))
-
-        // 死亡三段：先露原表情 -> 晕+晃两下 -> 沉下去
-        c.basinHp = 0
-        c.state = 3
+        c.bornAt = nowMs
         c.stateAt = nowMs
-        c.dieAt = nowMs
-        c.liveUntil = nowMs + DEATH_SHOW_MS + DEATH_DIZZY_MS
-        buzz(26)
-        audio.play(GameAudio.HIT3)
-        audio.play(GameAudio.KNOCK, 1f, 0.75f)
+        c.liveUntil = c.hit0 + ((hits - 1) * m.periodMs).toLong()
+        c.p = 0f
+        fx.add(Fx(1, holeX(idx), holeY(idx), 0f, 0f, 480L, nowMs, null, 0, 0f))
+        nextBeat = k + hits
     }
 
-    // 命中一次：基础分（银1/蓝3/绿5）+ 连击加成（每满3连 +1，封顶 +3）
-    private fun gain(c: Cell): Int {
-        combo += 1
+    private fun hitCell(i: Int, tapAt: Long) {
+        val c = cells[i]
+        if (c.state != 0 || c.basinHp <= 0) return
+        val d = abs(tapAt - nextJudge(c))
+        val perfect = d <= W_PERFECT
+        val mult = if (perfect) 1.0f else 0.62f
         val base = when (c.basinColor) {
             1 -> SCORE_BLUE
             2 -> SCORE_GREEN
             else -> SCORE_SILVER
         }
-        val g = base + min(combo / 3, 3)
+        val bonus = min(combo / 10, 5)
+        val g = (base * mult).roundToInt() + bonus
         score += g
-        if (combo % 3 == 0) audio.play(GameAudio.COMBO, 1f, 0.5f)
-        return g
+        combo += 1
+        if (combo > maxCombo) maxCombo = combo
+        notesTotal += 1
+        if (perfect) perfectCount += 1 else goodCount += 1
+
+        c.basinHp -= 1
+        c.basinShakeAt = nowMs
+        c.face = min(c.face + 1, 2)
+
+        val col = if (perfect) Color.rgb(255, 222, 120) else Color.rgb(200, 232, 255)
+        fx.add(Fx(0, holeX(i), cutY(i) - charH * 0.34f, 0f, 0f, 560L, nowMs,
+            (if (perfect) "Perfect +" else "Good +") + g, col, charW * 0.17f))
+        fx.add(Fx(1, holeX(i), cutY(i), 0f, 0f, 300L, nowMs, null, 0, 0f))
+
+        if (c.basinHp > 0) {
+            audio.play(if (c.basinHp >= 2) GameAudio.HIT1 else GameAudio.HIT2)
+            buzz(9)
+        } else {
+            knockOff(i)
+        }
     }
 
-    private fun miss(x: Float, y: Float) {
-        combo = 0
-        if (score > 0) {
-            score -= 1
-            fx.add(Fx(0, x, y, 0f, 0f, 460L, nowMs, "-1", Color.rgb(255, 120, 120), charW * 0.20f))
+    private fun knockOff(i: Int) {
+        val c = cells[i]
+        val cx = holeX(i)
+        val bw = charW * 0.78f
+        val bh = bw * bmpBasins[c.basinColor].height / bmpBasins[c.basinColor].width
+        val baseTop = cutY(i) - charH * (HEAD_LIFT + HEAD_C)
+        val by = baseTop + charH * 0.37f - bh / 2f
+        val dir = if (hash(i * 7 + 3) > 0.5f) 1f else -1f
+        basins.add(
+            FlyBasin(
+                cx, by,
+                dir * dp(90f + hash(i + 11) * 130f),
+                -dp(420f + hash(i + 17) * 160f),
+                0f,
+                dir * (300f + hash(i + 23) * 260f),
+                bw,
+                c.basinColor
+            )
+        )
+        for (j in 0 until 3) {
+            fx.add(
+                Fx(
+                    2, cx + (hash(i * 13 + j) - 0.5f) * charW * 0.5f, by,
+                    (hash(i * 31 + j) - 0.5f) * dp(80f), -dp(40f + hash(i * 41 + j) * 60f),
+                    380L, nowMs, null, 0, dp(3f + hash(i * 53 + j) * 3f)
+                )
+            )
         }
+        c.basinHp = 0
+        c.state = 3
+        c.stateAt = nowMs
+        c.dieAt = nowMs
+        audio.play(GameAudio.HIT3)
+        audio.play(GameAudio.KNOCK, 1f, 0.7f)
+        buzz(22)
+    }
+
+    private fun missNote(i: Int) {
+        val c = cells[i]
+        combo = 0
+        missCount += 1
+        notesTotal += 1
+        score = max(0, score - MISS_PENALTY)
+        fx.add(Fx(0, holeX(i), cutY(i) - charH * 0.30f, 0f, 0f, 620L, nowMs, "Miss", cRed, charW * 0.18f))
+        c.state = 2
+        c.face = 2
+        c.basinHp = 0
+        c.retreatAt = nowMs + 130L
+        audio.play(GameAudio.MISS, 0.9f, 0.8f)
+        buzz(6)
+    }
+
+    private fun missTap(x: Float, y: Float) {
+        combo = 0
+        score = max(0, score - MISS_PENALTY)
+        fx.add(Fx(0, x, y, 0f, 0f, 460L, nowMs, "-" + MISS_PENALTY, cRed, charW * 0.17f))
         fx.add(Fx(1, x, y, 0f, 0f, 300L, nowMs, null, 0, 0f))
         audio.play(GameAudio.MISS, 0.85f, 0.9f)
         buzz(8)
@@ -1041,6 +1163,7 @@ class GameView(context: Context) : View(context) {
         if (gearR.contains(x, y)) {
             showSettings = true
             dragSld = -1
+            audio.pauseBgm()
             invalidate()
             return true
         }
@@ -1050,27 +1173,80 @@ class GameView(context: Context) : View(context) {
             return true
         }
 
+        val t = nowMs
         var bestIdx = -1
-        var bestD = Float.MAX_VALUE
+        var bestD = Long.MAX_VALUE
         for (i in 0 until NC) {
             val c = cells[i]
-            if (!c.active || c.p < 0.35f) continue
+            if (!c.active || c.state != 0 || c.basinHp <= 0 || c.p < 0.35f) continue
             val cx = holeX(i)
             val cut = cutY(i)
             val topY = cut - charH * (HEAD_LIFT + HEAD_C)
             if (x < cx - charW * 0.47f || x > cx + charW * 0.47f) continue
             if (y < topY || y > cut + ry * 0.4f) continue
-            val d = kotlin.math.abs(y - (topY + cut) / 2f)
-            if (d < bestD) { bestD = d; bestIdx = i }
+            val d = abs(t - nextJudge(c))
+            if (d < bestD) {
+                bestD = d
+                bestIdx = i
+            }
         }
 
-        if (bestIdx >= 0) hit(bestIdx) else miss(x, y)
+        if (bestIdx >= 0 && bestD <= W_GOOD) hitCell(bestIdx, t) else missTap(x, y)
         return true
     }
 
+    private fun songPos(): Long {
+        val raw = if (audio.bgmPlaying) audio.positionMs() else (System.currentTimeMillis() - gameStartAt)
+        if (raw < lastSongPos) return lastSongPos
+        lastSongPos = raw
+        return raw
+    }
+
+    private fun ensureMap() {
+        if (map != null || analyzing) return
+        analyzing = true
+        val uriStr = audio.bgmUriString
+        Thread {
+            var got: BeatMap? = null
+            var err = ""
+            try {
+                got = BeatDetector.loadCache(ctx, uriStr)
+                if (got == null) {
+                    val u = if (uriStr != null) Uri.parse(uriStr) else null
+                    got = BeatDetector.analyze(ctx, u, R.raw.bgm)
+                    if (got != null) BeatDetector.saveCache(ctx, uriStr, got)
+                }
+            } catch (t: Throwable) {
+                err = t.toString()
+            }
+            val m2 = got
+            val e2 = err
+            post {
+                analyzing = false
+                map = m2
+                mapErr = if (m2 == null) (if (e2.isEmpty()) "识别失败" else e2) else ""
+                invalidate()
+            }
+        }.start()
+    }
+
+    private fun refreshMap() {
+        map = null
+        analyzing = false
+        lastSongPos = -1L
+        ensureMap()
+        invalidate()
+    }
+
     private fun start() {
+        val m = map ?: return
         score = 0
         combo = 0
+        maxCombo = 0
+        perfectCount = 0
+        goodCount = 0
+        missCount = 0
+        notesTotal = 0
         fx.clear()
         basins.clear()
         for (c in cells) {
@@ -1079,20 +1255,32 @@ class GameView(context: Context) : View(context) {
             c.state = 0
             c.retreatAt = 0L
             c.dizzySfx = false
+            c.basinHp = 0
+            c.hit0 = 0L
+            c.hitsTotal = 1
         }
+        lastCell = -1
+        nextBeat = 0
+        while (nextBeat < m.count && m.time(nextBeat) + judgeOffset < START_SKIP_MS) nextBeat++
         phase = Phase.PLAYING
-        audio.play(GameAudio.START, 1f, 0.9f)
-        audio.startBgm()
-        startAt = System.currentTimeMillis()
-        nowMs = startAt
-        nextSpawnAt = startAt + 300L
+        lastSongPos = -1L
+        gameStartAt = System.currentTimeMillis()
         lastFrame = 0L
+        audio.restartBgm()
+        audio.play(GameAudio.START, 1f, 0.5f)
+        nowMs = 0L
         postInvalidateOnAnimation()
     }
 
     private fun gameOver() {
         phase = Phase.OVER
-        for (c in cells) if (c.active) c.retreatAt = nowMs
+        for (c in cells) {
+            c.active = false
+            c.p = 0f
+            c.retreatAt = 0L
+            c.state = 0
+            c.basinHp = 0
+        }
         combo = 0
         audio.play(GameAudio.OVER, 1f, 0.9f)
         if (score > best) {
@@ -1146,6 +1334,7 @@ class GameView(context: Context) : View(context) {
         } catch (t: Throwable) {
         }
         audio.setBgm(uri, name)
+        refreshMap()
         invalidate()
     }
 }

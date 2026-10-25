@@ -6,6 +6,7 @@ import android.media.AudioAttributes
 import android.media.MediaPlayer
 import android.media.SoundPool
 import android.net.Uri
+import android.os.SystemClock
 
 /**
  * 音频：SoundPool 播音效，MediaPlayer 循环背景音乐。
@@ -65,6 +66,66 @@ class GameAudio(private val ctx: Context) {
     private var mp: MediaPlayer? = null
     private var mpReady = false
     private var wantBgm = false
+    private var lastRawPos = -1L
+    private var lastRawAt = 0L
+
+    /** 分析/播放音乐长度（毫秒） */
+    var durationMs = 0L
+        private set
+
+    val bgmReady: Boolean get() = mpReady
+
+    val bgmPlaying: Boolean
+        get() = try {
+            mpReady && mp?.isPlaying == true
+        } catch (t: Throwable) {
+            false
+        }
+
+    val bgmUriString: String?
+        get() = try {
+            sp.getString("bgmUri", null)
+        } catch (t: Throwable) {
+            null
+        }
+
+    /** 平滑后的播放进度，供节奏调度当全局时钟 */
+    fun positionMs(): Long {
+        if (!mpReady) return 0L
+        val p = try {
+            (mp?.currentPosition ?: 0).toLong()
+        } catch (t: Throwable) {
+            return 0L
+        }
+        val now = SystemClock.elapsedRealtime()
+        if (p != lastRawPos) {
+            lastRawPos = p
+            lastRawAt = now
+            return p
+        }
+        val est = lastRawPos + (now - lastRawAt)
+        val cap = if (durationMs > 0L) durationMs else est
+        return if (est > cap) cap else est
+    }
+
+    /** 一局开始：从头播 */
+    fun restartBgm() {
+        wantBgm = true
+        lastRawPos = -1L
+        val p = mp
+        if (p == null) {
+            startBgm()
+            return
+        }
+        try {
+            if (!mpReady) return
+            p.seekTo(0)
+            p.start()
+        } catch (t: Throwable) {
+            releaseBgm()
+            startBgm()
+        }
+    }
 
     init {
         try {
@@ -143,6 +204,7 @@ class GameAudio(private val ctx: Context) {
                     mp = r
                     mpReady = true
                     try {
+                        durationMs = r.duration.toLong()
                         r.setVolume(bgmVol, bgmVol)
                         if (wantBgm) r.start()
                     } catch (t: Throwable) {
@@ -183,6 +245,10 @@ class GameAudio(private val ctx: Context) {
             p.start()
             mp = p
             mpReady = true
+            try {
+                durationMs = p.duration.toLong()
+            } catch (t: Throwable) {
+            }
         } catch (t: Throwable) {
             mp = null
             mpReady = false
