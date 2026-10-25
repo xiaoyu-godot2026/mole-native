@@ -53,6 +53,18 @@ class GameAudio(private val ctx: Context) {
 
     var vibOn: Boolean = sp.getBoolean("vibOn", true)
 
+    init {
+        // v3.2：默认音量下调（音效 20%，音乐 50%），老用户也强制刷一次
+        try {
+            if (sp.getInt("volVer", 0) < 2) {
+                sfxVol = 0.20f
+                bgmVol = 0.50f
+                sp.edit().putFloat("sfxVol", 0.20f).putFloat("bgmVol", 0.50f).putInt("volVer", 2).apply()
+            }
+        } catch (t: Throwable) {
+        }
+    }
+
     /** 当前背景音乐名字（给设置面板显示） */
     val bgmName: String
         get() = sp.getString("bgmName", null) ?: "内置轻音乐"
