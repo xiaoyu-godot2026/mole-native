@@ -6,7 +6,7 @@
 
 用法: python3 art/gen_audio.py
 """
-import math, os, random, struct, wave
+import math, os, random, struct, sys, wave
 
 SR = 22050
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -310,10 +310,13 @@ def main():
         write_wav(os.path.join(OUT, name + ".wav"), s, 0.85)
         print("%-12s %5.2fs  %6.1f KB" % (name, len(s) / SR, os.path.getsize(os.path.join(OUT, name + ".wav")) / 1024))
 
-    b = bgm()
-    p = os.path.join(OUT, "bgm.wav")
-    write_wav(p, b, 0.72)
-    print("%-12s %5.2fs  %6.1f KB" % ("bgm", len(b) / SR, os.path.getsize(p) / 1024))
+    # 背景音乐：res/raw/bgm.mp3 是用户提供的正片，默认不覆盖。
+    # 需要合成版轻音乐时加 --synth-bgm 参数（会生成 bgm.wav，与 bgm.mp3 同名会冲突，先删 mp3）。
+    if "--synth-bgm" in sys.argv:
+        b = bgm()
+        p = os.path.join(OUT, "bgm.wav")
+        write_wav(p, b, 0.72)
+        print("%-12s %5.2fs  %6.1f KB" % ("bgm", len(b) / SR, os.path.getsize(p) / 1024))
 
     write_wav(PREVIEW, preview(d, order), 0.85)
     print("试听文件:", PREVIEW)
