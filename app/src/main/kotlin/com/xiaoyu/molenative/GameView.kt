@@ -122,11 +122,11 @@ class GameView(context: Context) : View(context) {
     private val bmpAngry = load(R.drawable.char_angry)
     private val bmpCry = load(R.drawable.char_cry)
     private val bmpDizzy = load(R.drawable.char_dizzy)
+    // 0 银（1 拍） / 1 蓝（连打 3 拍） / 2 绿（连打 2 拍）
     private val bmpBasins = arrayOf(
         load(R.drawable.basin_grey),
         load(R.drawable.basin_blue),
-        load(R.drawable.basin_green),
-        load(R.drawable.basin_red)
+        load(R.drawable.basin_green)
     )
     private val faces = arrayOf(bmpHappy, bmpAngry, bmpCry, bmpDizzy)
 
