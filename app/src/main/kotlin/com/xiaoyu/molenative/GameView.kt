@@ -209,6 +209,7 @@ class GameView(context: Context) : View(context) {
     private val sldOffHit = RectF()
 
     init {
+        Diag.boot(ctx)
         best = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getInt("best", 0)
         judgeOffset = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getInt("judgeOffset", 0)
         bestClassic = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getInt("bestC", 0)
@@ -281,6 +282,7 @@ class GameView(context: Context) : View(context) {
 
     override fun onDraw(canvas: Canvas) {
         try {
+            Diag.frame(System.nanoTime())
             drawFrame(canvas)
         } catch (t: Throwable) {
             try {
@@ -1177,7 +1179,8 @@ class GameView(context: Context) : View(context) {
     private fun hitCell(i: Int, tapAt: Long) {
         val c = cells[i]
         if (c.state != 0 || c.basinHp <= 0) return
-        val d = abs(tapAt - nextJudge(c))
+        val rawErr = tapAt - nextJudge(c)
+        val d = abs(rawErr)
         val perfect = d <= W_PERFECT
         val mult = if (perfect) 1.0f else 0.62f
         val base = when (c.basinColor) {
@@ -1192,6 +1195,7 @@ class GameView(context: Context) : View(context) {
         if (combo > maxCombo) maxCombo = combo
         notesTotal += 1
         if (perfect) perfectCount += 1 else goodCount += 1
+        Diag.judge(rawErr.toInt())
 
         c.basinHp -= 1
         c.basinShakeAt = nowMs
@@ -1509,8 +1513,11 @@ class GameView(context: Context) : View(context) {
         Thread {
             var got: BeatMap? = null
             var err = ""
+            var fromCache = false
+            val t0 = System.currentTimeMillis()
             try {
                 got = BeatDetector.loadCache(ctx, uriStr)
+                fromCache = got != null
                 if (got == null) {
                     val u = if (uriStr != null) Uri.parse(uriStr) else null
                     got = BeatDetector.analyze(ctx, u, R.raw.bgm)
@@ -1528,6 +1535,9 @@ class GameView(context: Context) : View(context) {
                     BeatMap(120.0, 500.0, 0.0, dur, ByteArray(0))
                 }
                 mapErr = if (m2 == null) "识别失败，已按 120 BPM 兜底" else ""
+                val src = if (fromCache) "cache" else "analyzed " + (System.currentTimeMillis() - t0) + "ms"
+                Diag.run("src", src)
+                Diag.line("map", src)
                 val mm = map
                 if (mm != null) buildChart(mm)
                 invalidate()
@@ -1545,6 +1555,8 @@ class GameView(context: Context) : View(context) {
 
     private fun start(m0: Mode) {
         mode = m0
+        Diag.clearRun()
+        Diag.run("mode", if (m0 == Mode.RHYTHM) "rhythm" else "classic")
         score = 0
         combo = 0
         maxCombo = 0
@@ -1583,6 +1595,7 @@ class GameView(context: Context) : View(context) {
             audio.pauseBgm()
         }
         sfx(GameAudio.START, 1f, 0.5f)
+        Diag.line("start", if (m0 == Mode.RHYTHM) "rhythm" else "classic")
         postInvalidateOnAnimation()
     }
 
@@ -1610,7 +1623,29 @@ class GameView(context: Context) : View(context) {
                 sp2.edit().putInt("bestC", bestClassic).apply()
             }
         }
+        diagDump("over")
         postInvalidateOnAnimation()
+    }
+
+    /** 一局结束时把关键数字写进剪贴板（助手在 DSH 里读走） */
+    private fun diagDump(tag: String) {
+        val m = map
+        val bpm = ((m?.bpm ?: 0.0) * 10.0).roundToInt() / 10.0
+        Diag.run("bpm", bpm)
+        Diag.run("beats", m?.count ?: 0)
+        Diag.run("chart", chart.size)
+        Diag.run("dur", (audio.durationMs / 100.0).roundToInt() / 10.0)
+        Diag.run("score", score)
+        Diag.run("best", if (mode == Mode.RHYTHM) best else bestClassic)
+        Diag.run("p", perfectCount)
+        Diag.run("g", goodCount)
+        Diag.run("miss", missCount)
+        Diag.run("combo", maxCombo)
+        Diag.run("vol", "sfx" + (audio.sfxVol * 100).roundToInt() + "/bgm" + (audio.bgmVol * 100).roundToInt())
+        Diag.run("off", (if (judgeOffset >= 0) "+" else "") + judgeOffset)
+        Diag.run("vib", if (audio.vibOn) 1 else 0)
+        Diag.run("mapErr", if (mapErr.isEmpty()) "-" else mapErr)
+        Diag.publish(tag)
     }
 
     private fun buzz(ms: Int) {
@@ -1657,6 +1692,7 @@ class GameView(context: Context) : View(context) {
         } catch (t: Throwable) {
         }
         audio.setBgm(uri, name)
+        Diag.line("bgm", (name ?: uri.toString()).take(60))
         refreshMap()
         invalidate()
     }

@@ -19,6 +19,7 @@ class MainActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        Diag.boot(this)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         try {
             val g = GameView(this)
@@ -31,6 +32,7 @@ class MainActivity : Activity() {
             tv.setBackgroundColor(android.graphics.Color.BLACK)
             tv.textSize = 11f
             setContentView(tv)
+            Diag.publish("bootfail")
         }
         hideSystemBars()
     }
