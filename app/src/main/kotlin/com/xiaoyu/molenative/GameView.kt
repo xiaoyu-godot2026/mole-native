@@ -112,6 +112,8 @@ class GameView(context: Context) : View(context) {
     private val pBg = Paint(Paint.ANTI_ALIAS_FLAG)
     private val pShadow = Paint(Paint.ANTI_ALIAS_FLAG)
     private val tmp = RectF()
+    private val outerRect = RectF()
+    private val innerRect = RectF()
     private val btnPath = Path()
     private val rimPath = Path()
     private val bodyPath = Path()
@@ -295,23 +297,29 @@ class GameView(context: Context) : View(context) {
             tmp.set(cx - holeRx, cy - holeRy, cx + holeRx, cy + holeRy)
             pFill.color = C_HOLE
             canvas.drawOval(tmp, pFill)
+            pStroke.color = 0x1AFFFFFF
+            pStroke.strokeWidth = dp * 1.2f
+            canvas.drawOval(tmp, pStroke)
 
             val c = cells[i]
             if (c.p > 0.01f) {
-                drawMole(canvas, cx, cy + holeRy * 0.30f, holeRx * 0.74f, holeRy * 1.85f, c.p, c.flash, i)
+                drawMole(canvas, cx, cy + holeRy * 0.95f, holeRx * 0.80f, holeRy * 1.95f, c.p, c.flash, i)
             }
 
             // 前沿：遮住鼹鼠下半身，做出“从洞里钻出来”的感觉
+            // 前沿：外圈下半沿 + 内圈下半沿反向 = 一圈月牙形的土沿
             val rim = rimPath
             rim.reset()
-            tmp.set(cx - holeRx * 1.04f, cy - holeRy * 1.02f, cx + holeRx * 1.04f, cy + holeRy * 1.02f)
-            rim.addArc(tmp, 0f, 180f)
+            outerRect.set(cx - holeRx * 1.07f, cy - holeRy * 1.14f, cx + holeRx * 1.07f, cy + holeRy * 1.14f)
+            innerRect.set(cx - holeRx * 0.90f, cy - holeRy * 0.92f, cx + holeRx * 0.90f, cy + holeRy * 0.92f)
+            rim.addArc(outerRect, 0f, 180f)
+            rim.addArc(innerRect, 180f, -180f)
             rim.close()
             pFill.color = C_HOLE_RIM
             canvas.drawPath(rim, pFill)
             pStroke.color = C_HOLE_LIP
-            pStroke.strokeWidth = dp * 1.6f
-            pStroke.alpha = 130
+            pStroke.strokeWidth = dp * 1.2f
+            pStroke.alpha = 110
             canvas.drawPath(rim, pStroke)
             pStroke.alpha = 255
         }
@@ -355,8 +363,8 @@ class GameView(context: Context) : View(context) {
 
         // 头顶高光
         pFill.color = C_FUR_LIGHT
-        pFill.alpha = 110
-        tmp.set(cx - mw * 0.66f, by - mh * 1.72f, cx + mw * 0.66f, by - mh * 1.02f)
+        pFill.alpha = 70
+        tmp.set(cx - mw * 0.50f, by - mh * 1.30f, cx + mw * 0.50f, by - mh * 0.88f)
         canvas.drawOval(tmp, pFill)
         pFill.alpha = 255
 
