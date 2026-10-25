@@ -42,6 +42,8 @@ class GameView(context: Context) : View(context) {
         var basinColor = 0
         var basinShakeAt = 0L
         var lastHitAt = 0L
+        var face = 0        // 0开心 1生气 2哭 3晕（锁定）
+        var reward = 0      // 这个角色总共还能给多少分
         var p = 0f
     }
 
@@ -349,9 +351,7 @@ class GameView(context: Context) : View(context) {
     private fun drawMole(canvas: Canvas, i: Int, c: Cell) {
         val cx = holeX(i)
         val cut = cutY(i)
-        // 表情跟着铁盆剩余血量走：挨打的次数 0/1/2/3+ → 开心/生气/哭/晕
-        val faceIdx = if (c.state == 0) (c.basinColor + 1 - c.basinHp).coerceIn(0, 3) else c.state.coerceIn(0, 3)
-        val bmp = faces[faceIdx]
+        val bmp = faces[c.face.coerceIn(0, 3)]
         val w = charW
         val h = w * bmp.height / bmp.width
         val topY = cut - h * (HEAD_LIFT + HEAD_C) + (1f - c.p) * h * RISE_TRAVEL
@@ -618,6 +618,8 @@ class GameView(context: Context) : View(context) {
             else -> 3
         }
         c.basinHp = c.basinColor + 1
+        c.face = 0
+        c.reward = HIT_SCORE * c.basinHp
         c.basinShakeAt = 0L
         c.lastHitAt = 0L
         c.liveUntil = nowMs + (1500L - min(score * 8L, 520L)).coerceAtLeast(900L) + (c.basinHp - 1) * 460L
@@ -629,64 +631,70 @@ class GameView(context: Context) : View(context) {
         val c = cells[i]
         val cx = holeX(i)
         val cy = cutY(i)
-        // 铁盆还有血：先砸一下，不掉
-        if (c.state == 0 && c.basinHp > 1) {
+
+        // 已经晕倒：状态锁死，再按既不换脸也不加分
+        if (c.state >= 3) return
+
+        // 铁盆还有血：砸一下不掉，表情凶一层
+        if (c.basinHp > 1) {
             c.basinHp -= 1
+            c.face = min(c.face + 1, 3)
             c.basinShakeAt = nowMs
             c.lastHitAt = nowMs
             c.liveUntil = max(c.liveUntil, nowMs + 520L)
-            score += HIT_SCORE
-            combo += 1
-            fx.add(Fx(0, cx, cy - charH * 0.36f, 0f, 0f, 520L, nowMs, "+$HIT_SCORE", Color.rgb(214, 236, 250), charW * 0.20f))
+            award(c, cx, cy - charH * 0.36f, Color.rgb(214, 236, 250))
             fx.add(Fx(1, cx, cy - charH * 0.10f, 0f, 0f, 320L, nowMs, null, 0, 0f))
             buzz(12)
             beep(760)
             return
         }
 
-        // 盆被打飞
-        if (c.state == 0) {
-            val bw = charW * 0.78f
-            val bh = bw * bmpBasins[c.basinColor].height / bmpBasins[c.basinColor].width
-            val baseTop = cutY(i) - charH * (HEAD_LIFT + HEAD_C) + (1f - c.p) * charH * RISE_TRAVEL
-            val by = baseTop + charH * 0.37f - bh / 2f
-            val dir = if (Random.nextBoolean()) 1f else -1f
-            basins.add(
-                FlyBasin(
-                    cx, by,
-                    dir * dp(90f + Random.nextFloat() * 130f),
-                    -dp(420f + Random.nextFloat() * 160f),
-                    0f,
-                    dir * (300f + Random.nextFloat() * 260f),
-                    bw,
-                    c.basinColor
+        // 最后一下：盆被打飞，人物当场晕住，很快沉下去
+        val bw = charW * 0.78f
+        val bh = bw * bmpBasins[c.basinColor].height / bmpBasins[c.basinColor].width
+        val baseTop = cutY(i) - charH * (HEAD_LIFT + HEAD_C) + (1f - c.p) * charH * RISE_TRAVEL
+        val by = baseTop + charH * 0.37f - bh / 2f
+        val dir = if (Random.nextBoolean()) 1f else -1f
+        basins.add(
+            FlyBasin(
+                cx, by,
+                dir * dp(90f + Random.nextFloat() * 130f),
+                -dp(420f + Random.nextFloat() * 160f),
+                0f,
+                dir * (300f + Random.nextFloat() * 260f),
+                bw,
+                c.basinColor
+            )
+        )
+        for (k in 0 until 3) {
+            fx.add(
+                Fx(
+                    2, cx + (Random.nextFloat() - 0.5f) * charW * 0.5f, by,
+                    (Random.nextFloat() - 0.5f) * dp(80f), -dp(40f + Random.nextFloat() * 60f),
+                    380L, nowMs, null, 0, dp(3f + Random.nextFloat() * 3f)
                 )
             )
-            for (k in 0 until 3) {
-                fx.add(
-                    Fx(
-                        2, cx + (Random.nextFloat() - 0.5f) * charW * 0.5f, by,
-                        (Random.nextFloat() - 0.5f) * dp(80f), -dp(40f + Random.nextFloat() * 60f),
-                        380L, nowMs, null, 0, dp(3f + Random.nextFloat() * 3f)
-                    )
-                )
-            }
         }
 
-        score += HIT_SCORE
-        combo += 1
-
-        fx.add(Fx(0, cx, cy - charH * 0.30f, 0f, 0f, 700L, nowMs, "+$HIT_SCORE", Color.rgb(255, 214, 102), charW * 0.26f))
-        fx.add(Fx(1, cx, cy, 0f, 0f, 380L, nowMs, null, 0, 0f))
-
+        c.basinHp = 0
+        c.face = 3
+        c.state = 3
         c.stateAt = nowMs
-        when (c.state) {
-            0 -> { c.state = 1; c.liveUntil = nowMs + 800L; beep(880) }
-            1 -> { c.state = 2; c.liveUntil = nowMs + 800L; beep(1080) }
-            2 -> { c.state = 3; c.liveUntil = nowMs + 900L; beep(1300) }
-            else -> { c.retreatAt = nowMs; beep(1600) }
-        }
-        buzz(if (c.state == 1) 26 else 14)
+        c.liveUntil = nowMs + 300L
+        award(c, cx, cy - charH * 0.30f, Color.rgb(255, 214, 102))
+        beep(1600)
+        buzz(26)
+    }
+
+    // 每个角色总共只有一笔固定分，敲几下都在这笔里分，敲完就是 0
+    private fun award(c: Cell, cx: Float, cy: Float, color: Int) {
+        val g = min(HIT_SCORE, c.reward)
+        if (g <= 0) return
+        c.reward -= g
+        score += g
+        combo += 1
+        fx.add(Fx(0, cx, cy, 0f, 0f, 620L, nowMs, "+$g", color, charW * 0.24f))
+        fx.add(Fx(1, cx, cy, 0f, 0f, 380L, nowMs, null, 0, 0f))
     }
 
     private fun miss() {
