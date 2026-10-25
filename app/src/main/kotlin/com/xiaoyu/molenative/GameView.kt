@@ -59,6 +59,7 @@ class GameView(context: Context) : View(context) {
     companion object {
         private const val COLS = 3
         private const val ROWS = 3
+        private const val HIT_SCORE = 10        // 每敲一下固定分
         private const val NC = COLS * ROWS
         private const val ROUND_MS = 30_000L
         private const val PREFS = "mole"
@@ -320,16 +321,24 @@ class GameView(context: Context) : View(context) {
             val cx = holeX(i)
             val cy = holeY(i)
 
-            val sy = cy + ry * 0.30f
-            val hw = rx * 1.30f
-            val hh = ry * 1.75f
-            mat.setScale(hw, hh)
-            mat.postTranslate(cx, sy)
-            shadowShader?.setLocalMatrix(mat)
-            pFill.shader = shadowShader
-            canvas.drawOval(cx - hw, sy - hh, cx + hw, sy + hh, pFill)
-            pFill.shader = null
+            pShadow.color = 0x22001A2E
+            canvas.drawOval(cx - rx * 1.02f, cy - ry + dp(4f), cx + rx * 1.02f, cy + ry + dp(10f), pShadow)
 
+            pFill.color = cPool
+            canvas.drawOval(cx - rx, cy - ry, cx + rx, cy + ry, pFill)
+            tmp.set(cx - rx * 0.94f, cy - ry * 0.86f, cx + rx * 0.94f, cy + ry * 0.80f)
+            pFill.color = cDeep
+            canvas.drawOval(tmp, pFill)
+
+            pFill.color = 0x40CFEFFF
+            tmp.set(cx - rx * 0.92f, cy + ry * 0.10f, cx + rx * 0.92f, cy + ry * 0.92f)
+            canvas.drawOval(tmp, pFill)
+
+            pStroke.style = Paint.Style.STROKE
+            pStroke.color = 0x99CFF0FF.toInt()
+            pStroke.strokeWidth = dp(2.5f)
+            canvas.drawOval(cx - rx + dp(1f), cy - ry + dp(1f), cx + rx - dp(1f), cy + ry - dp(1f), pStroke)
+            pStroke.style = Paint.Style.FILL
         }
         for (i in 0 until NC) {
             val c = cells[i]
@@ -340,7 +349,9 @@ class GameView(context: Context) : View(context) {
     private fun drawMole(canvas: Canvas, i: Int, c: Cell) {
         val cx = holeX(i)
         val cut = cutY(i)
-        val bmp = faces[c.state.coerceIn(0, 3)]
+        // 表情跟着铁盆剩余血量走：挨打的次数 0/1/2/3+ → 开心/生气/哭/晕
+        val faceIdx = if (c.state == 0) (c.basinColor + 1 - c.basinHp).coerceIn(0, 3) else c.state.coerceIn(0, 3)
+        val bmp = faces[faceIdx]
         val w = charW
         val h = w * bmp.height / bmp.width
         val topY = cut - h * (HEAD_LIFT + HEAD_C) + (1f - c.p) * h * RISE_TRAVEL
@@ -618,21 +629,15 @@ class GameView(context: Context) : View(context) {
         val c = cells[i]
         val cx = holeX(i)
         val cy = cutY(i)
-        val mult = 1 + min(combo / 5, 3)
-
-        // 单只冷却，防止狂点秒杀
-        if (nowMs - c.lastHitAt < 220L) return
-        c.lastHitAt = nowMs
-
         // 铁盆还有血：先砸一下，不掉
         if (c.state == 0 && c.basinHp > 1) {
             c.basinHp -= 1
             c.basinShakeAt = nowMs
-            c.liveUntil = nowMs + 620L
-            val g = 1 * mult
-            score += g
+            c.lastHitAt = nowMs
+            c.liveUntil = max(c.liveUntil, nowMs + 520L)
+            score += HIT_SCORE
             combo += 1
-            fx.add(Fx(0, cx, cy - charH * 0.36f, 0f, 0f, 520L, nowMs, "+$g", Color.rgb(214, 236, 250), charW * 0.20f))
+            fx.add(Fx(0, cx, cy - charH * 0.36f, 0f, 0f, 520L, nowMs, "+$HIT_SCORE", Color.rgb(214, 236, 250), charW * 0.20f))
             fx.add(Fx(1, cx, cy - charH * 0.10f, 0f, 0f, 320L, nowMs, null, 0, 0f))
             buzz(12)
             beep(760)
@@ -668,20 +673,11 @@ class GameView(context: Context) : View(context) {
             }
         }
 
-        val gained = when (c.state) {
-            0 -> 2 * mult
-            1 -> 2 * mult
-            2 -> 3 * mult
-            else -> 1
-        }
-        score += gained
+        score += HIT_SCORE
         combo += 1
 
-        fx.add(Fx(0, cx, cy - charH * 0.30f, 0f, 0f, 700L, nowMs, "+$gained", Color.rgb(255, 214, 102), charW * 0.26f))
+        fx.add(Fx(0, cx, cy - charH * 0.30f, 0f, 0f, 700L, nowMs, "+$HIT_SCORE", Color.rgb(255, 214, 102), charW * 0.26f))
         fx.add(Fx(1, cx, cy, 0f, 0f, 380L, nowMs, null, 0, 0f))
-        if (combo >= 3) {
-            fx.add(Fx(3, cx, cy - charH * 0.52f, 0f, 0f, 760L, nowMs, "×$combo", 0, charW * 0.20f))
-        }
 
         c.stateAt = nowMs
         when (c.state) {
