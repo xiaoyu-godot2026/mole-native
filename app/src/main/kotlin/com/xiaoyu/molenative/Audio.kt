@@ -134,6 +134,12 @@ class GameAudio(private val ctx: Context) {
         return if (est > cap) cap else est
     }
 
+    /** 暂停恢复后重置平滑基线，避免用暂停时长把进度估算顶飞 */
+    fun rebaseClock() {
+        lastRawPos = -1L
+        lastRawAt = SystemClock.elapsedRealtime()
+    }
+
     /** 一局开始：从头播 */
     fun restartBgm() {
         wantBgm = true

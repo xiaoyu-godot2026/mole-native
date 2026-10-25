@@ -53,6 +53,13 @@ class MainActivity : Activity() {
     }
 
     @Deprecated("Deprecated in Java")
+    override fun onBackPressed() {
+        val g = game
+        if (g != null && g.onBackPressed()) return
+        super.onBackPressed()
+    }
+
+    @Deprecated("Deprecated in Java")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
         if (requestCode == REQ_BGM && resultCode == RESULT_OK) {

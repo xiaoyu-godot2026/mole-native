@@ -195,6 +195,12 @@ class GameView(context: Context) : View(context) {
     // 设置面板
     private var showSettings = false
     private var dragSld = -1
+
+    // 暂停
+    private var paused = false
+    private val pauseBtnR = RectF()
+    private val btnResume = RectF()
+    private val btnMenu = RectF()
     private val gearR = RectF()
     private val panel = RectF()
     private val sldSfxTrack = RectF()
@@ -305,7 +311,7 @@ class GameView(context: Context) : View(context) {
 
     private fun drawFrame(canvas: Canvas) {
         if (phase == Phase.PLAYING) {
-            if (!showSettings) {
+            if (!showSettings && !paused) {
                 if (mode == Mode.RHYTHM) {
                     nowMs = songPos()
                     val m = map
@@ -324,7 +330,7 @@ class GameView(context: Context) : View(context) {
         lastFrame = wall
 
         updateFx()
-        if (!showSettings) updateBasins(dt)
+        if (!showSettings && !paused) updateBasins(dt)
 
         canvas.save()
         canvas.translate(0f, insetTop)
@@ -336,9 +342,10 @@ class GameView(context: Context) : View(context) {
         drawHud(canvas)
         if (phase != Phase.PLAYING) drawOverlay(canvas)
         if (showSettings) drawSettings(canvas)
+        if (paused) drawPause(canvas)
         canvas.restore()
 
-        if (phase != Phase.READY) postInvalidateOnAnimation()
+        if (phase != Phase.READY && !paused) postInvalidateOnAnimation()
     }
 
     private fun drawSea(canvas: Canvas) {
@@ -627,6 +634,26 @@ class GameView(context: Context) : View(context) {
         canvas.drawCircle(gx - lw * 0.50f, gy - step, gs * 0.072f, pFill)
         canvas.drawCircle(gx + lw * 0.30f, gy, gs * 0.072f, pFill)
         canvas.drawCircle(gx - lw * 0.05f, gy + step, gs * 0.072f, pFill)
+
+        // 暂停键（只有对局中才出现）
+        if (phase == Phase.PLAYING) {
+            val ps = hudH * 0.215f
+            val gap = dp(8f)
+            pauseBtnR.set(gearR.left - gap - ps, gearR.top, gearR.left - gap, gearR.top + ps)
+            pFill.color = 0x3DFFFFFF
+            canvas.drawRoundRect(pauseBtnR, ps * 0.32f, ps * 0.32f, pFill)
+            pFill.color = gc
+            val bw = ps * 0.085f
+            val bh = ps * 0.36f
+            val cx2 = pauseBtnR.centerX()
+            val cy2 = pauseBtnR.centerY()
+            tmp2.set(cx2 - ps * 0.17f, cy2 - bh, cx2 - ps * 0.17f + bw, cy2 + bh)
+            canvas.drawRoundRect(tmp2, bw / 2f, bw / 2f, pFill)
+            tmp2.set(cx2 + ps * 0.10f, cy2 - bh, cx2 + ps * 0.10f + bw, cy2 + bh)
+            canvas.drawRoundRect(tmp2, bw / 2f, bw / 2f, pFill)
+        } else {
+            pauseBtnR.setEmpty()
+        }
     }
 
     private fun layoutSettings() {
@@ -1009,8 +1036,46 @@ class GameView(context: Context) : View(context) {
             btnRect2.set(vw * 0.5f - pw * 0.20f, pt + ph * 0.86f, vw * 0.5f + pw * 0.20f, pt + ph * 0.94f)
             pText.textSize = btnRect2.height() * 0.62f
             pText.color = cInkSoft
-            canvas.drawText("换模式", btnRect2.centerX(), btnRect2.centerY() + btnRect2.height() * 0.22f, pText)
+            canvas.drawText("回主界面", btnRect2.centerX(), btnRect2.centerY() + btnRect2.height() * 0.22f, pText)
         }
+    }
+
+    private fun drawPause(canvas: Canvas) {
+        pFill.shader = null
+        pFill.color = 0xB3091E2E.toInt()
+        canvas.drawRect(0f, -insetTop, vw, vh, pFill)
+
+        val pw = vw * 0.74f
+        val ph = vh * 0.30f
+        val pl = (vw - pw) / 2f
+        val pt = (vh - ph) / 2f
+
+        pShadow.color = 0x66000000
+        tmp.set(pl, pt + dp(6f), pl + pw, pt + ph + dp(6f))
+        canvas.drawRoundRect(tmp, dp(26f), dp(26f), pShadow)
+        pFill.color = 0xF2FFFFFF.toInt()
+        tmp.set(pl, pt, pl + pw, pt + ph)
+        canvas.drawRoundRect(tmp, dp(26f), dp(26f), pFill)
+
+        pText.textAlign = Paint.Align.CENTER
+        pText.style = Paint.Style.FILL
+        pText.textSize = pw * 0.10f
+        pText.color = cInk
+        canvas.drawText("已暂停", vw * 0.5f, pt + ph * 0.20f, pText)
+
+        btnResume.set(pl + pw * 0.08f, pt + ph * 0.34f, pl + pw * 0.92f, pt + ph * 0.58f)
+        pFill.color = cGold
+        canvas.drawRoundRect(btnResume, btnResume.height() / 2f, btnResume.height() / 2f, pFill)
+        pText.textSize = btnResume.height() * 0.40f
+        pText.color = Color.rgb(92, 60, 5)
+        canvas.drawText("继续", btnResume.centerX(), btnResume.centerY() + btnResume.height() * 0.14f, pText)
+
+        btnMenu.set(pl + pw * 0.08f, pt + ph * 0.64f, pl + pw * 0.92f, pt + ph * 0.88f)
+        pFill.color = 0x181E4C6E
+        canvas.drawRoundRect(btnMenu, btnMenu.height() / 2f, btnMenu.height() / 2f, pFill)
+        pText.textSize = btnMenu.height() * 0.40f
+        pText.color = cInk
+        canvas.drawText("回主界面", btnMenu.centerX(), btnMenu.centerY() + btnMenu.height() * 0.14f, pText)
     }
 
     private fun tickRhythm() {
@@ -1134,8 +1199,8 @@ class GameView(context: Context) : View(context) {
             val e = m.energyAt(k)
             val strong = e > 165
             val mid = e > 95
-            var place = if (mid) true else (k % 2 == 0)
-            if (hash(k) < 0.10f) place = false
+            var place = if (mid) true else (hash(k * 13 + 5) > 0.25f)
+            if (hash(k) < 0.06f) place = false
             if (!place) {
                 k++
                 continue
@@ -1143,8 +1208,10 @@ class GameView(context: Context) : View(context) {
             var hits = 1
             val hh = hash(k + 991)
             if (strong) {
-                if (hh > 0.90f) hits = 3 else if (hh > 0.72f) hits = 2
-            } else if (mid && hh > 0.92f) {
+                if (hh > 0.88f) hits = 3 else if (hh > 0.55f) hits = 2
+            } else if (mid) {
+                if (hh > 0.80f) hits = 2
+            } else if (hh > 0.93f) {
                 hits = 2
             }
             if (k + hits > m.count) hits = 1
@@ -1452,6 +1519,14 @@ class GameView(context: Context) : View(context) {
             return true
         }
 
+        if (paused) {
+            if (e.action == MotionEvent.ACTION_DOWN) {
+                if (btnResume.contains(x, y)) resumeGame()
+                else if (btnMenu.contains(x, y)) exitToMenu()
+            }
+            return true
+        }
+
         if (e.action != MotionEvent.ACTION_DOWN) return true
 
         if (gearR.contains(x, y)) {
@@ -1460,6 +1535,11 @@ class GameView(context: Context) : View(context) {
             // 只有音游对局必须暂停（游戏暂停而歌继续会失同步）；其余让音乐继续，方便边拖滑条边听
             if (phase == Phase.PLAYING && mode == Mode.RHYTHM) audio.pauseBgm()
             invalidate()
+            return true
+        }
+
+        if (phase == Phase.PLAYING && pauseBtnR.contains(x, y)) {
+            pauseGame()
             return true
         }
 
@@ -1675,6 +1755,73 @@ class GameView(context: Context) : View(context) {
         Diag.publish(tag)
     }
 
+    // ---------------- 暂停 / 主界面 ----------------
+
+    private fun pauseGame() {
+        if (phase != Phase.PLAYING || paused) return
+        paused = true
+        if (mode == Mode.RHYTHM) audio.pauseBgm()
+        invalidate()
+    }
+
+    private fun resumeGame() {
+        if (!paused) return
+        paused = false
+        lastFrame = 0L
+        if (phase == Phase.PLAYING && mode == Mode.RHYTHM) {
+            // 音乐恢复前 songPos() 会退回墙钟，先把墙钟基准挪到暂停点，避免时钟跳一大截
+            gameStartAt = System.currentTimeMillis() - nowMs
+            audio.resumeBgm()
+            audio.rebaseClock()
+        }
+        postInvalidateOnAnimation()
+    }
+
+    /** 放弃本局回主界面：不计分、不写最高分、不写诊断 */
+    private fun exitToMenu() {
+        paused = false
+        showSettings = false
+        phase = Phase.READY
+        combo = 0
+        score = 0
+        for (c in cells) {
+            c.active = false
+            c.p = 0f
+            c.state = 0
+            c.basinHp = 0
+            c.retreatAt = 0L
+            c.dizzySfx = false
+        }
+        fx.clear()
+        basins.clear()
+        lastSongPos = -1L
+        audio.restartBgm()
+        invalidate()
+    }
+
+    /** 返回键：设置 → 暂停中继续 → 对局中弹暂停 → 结算回主界面；true = 已消费 */
+    fun onBackPressed(): Boolean {
+        if (showSettings) {
+            closeSettings()
+            return true
+        }
+        if (paused) {
+            resumeGame()
+            return true
+        }
+        return when (phase) {
+            Phase.PLAYING -> {
+                pauseGame()
+                true
+            }
+            Phase.OVER -> {
+                exitToMenu()
+                true
+            }
+            else -> false
+        }
+    }
+
     private fun buzz(ms: Int) {
         if (!audio.vibOn) return
         try {
@@ -1698,7 +1845,8 @@ class GameView(context: Context) : View(context) {
     // 由 MainActivity 在 onResume / onPause 调用
     fun onResumeAudio() {
         try {
-            if (phase == Phase.READY) audio.startBgm() else bgmPolicy()
+            if (paused) audio.pauseBgm()
+            else if (phase == Phase.READY) audio.startBgm() else bgmPolicy()
         } catch (t: Throwable) {
         }
     }
