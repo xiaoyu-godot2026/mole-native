@@ -3,9 +3,9 @@
 用「鲸鱼娘」角色做的打地鼠 + 音游混合小游戏。原生 Android，Kotlin + Canvas 自绘，**零第三方依赖**。
 
 - 包名：`com.xiaoyu.molenative`
-- 当前版本：**3.3**（versionCode 15）
+- 当前版本：**3.5.2**（versionCode 20）
 - 最低支持：Android 8.0（minSdk 26）
-- 安装包：约 5.8 MB
+- 安装包：约 5.6 MB（CI 产物 5.63 MB）
 
 ## 两种模式
 
@@ -25,14 +25,15 @@
 ```
 app/src/main/kotlin/com/xiaoyu/molenative/
 ├── MainActivity.kt      全屏沉浸、生命周期、选歌回调
-├── GameView.kt          全部玩法与绘制（约 1660 行）
+├── GameView.kt          全部玩法与绘制（约 1965 行）
 ├── Audio.kt             SoundPool 音效 + MediaPlayer 背景音乐
-└── Beat.kt              音频解码 → 节拍识别 → 拍点表
+├── Beat.kt              音频解码 → 节拍识别 → 拍点表
+└── Diag.kt              每局诊断 / 崩溃记录 / 写系统剪贴板
 app/src/main/res/
 ├── drawable-nodpi/      角色四表情 + 三种铁盆（无损 PNG）
 └── raw/                 背景音乐 mp3 + 9 个合成音效 wav
 art/                     美术/音频生成脚本与管线说明
-docs/资产档案.md          角色设定、资产规格、数值、代码地图（完整档案）
+docs/项目档案.md          状态、数值、角色设定、资产规格、代码地图（完整档案）
 keystore/                固定签名（保证覆盖安装不丢存档）
 ```
 
@@ -46,4 +47,4 @@ keystore/                固定签名（保证覆盖安装不丢存档）
 ## 详细资料
 
 角色设定、表情规格、抠图参数、全部玩法数值、代码地图、踩过的坑 —— 全部在
-[docs/资产档案.md](docs/资产档案.md)。
+[docs/项目档案.md](docs/项目档案.md)。
