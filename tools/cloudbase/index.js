@@ -11,7 +11,19 @@ try {
 const MODES = ['rhythm', 'classic'];
 const DIFFS = ['easy', 'normal', 'hard'];
 const MAX_SCORE = 300000;
-const VERSION = '1.0';
+const VERSION = '1.1';
+// 省资源点 + 防刷：一局游戏不可能 6 秒内打完，同一 uid 6 秒内重复提交直接丢弃
+const SUBMIT_GAP_MS = 6000;
+const TOP_TTL_MS = 20000;    // 榜单缓存 20 秒
+const TOTAL_TTL_MS = 60000;  // 参与人数缓存 60 秒
+const cacheTop = {};    // mode|limit -> {t,total,list}
+const cacheTotal = {};  // mode -> {t,n}
+const lastHit = {};     // mode|uid -> {t,rank,best,total}
+
+function dropTopCache(mode) {
+  const pre = mode + '|';
+  Object.keys(cacheTop).forEach(function (k) { if (k.indexOf(pre) === 0) delete cacheTop[k]; });
+}
 
 let db = null;
 let cmd = null;
@@ -93,11 +105,21 @@ exports.main = async (event) => {
       let limit = toInt(p.limit);
       if (!isFinite(limit) || limit < 1) limit = 20;
       if (limit > 50) limit = 50;
-      const total = (await col.where({ mode: mode }).count()).total;
+      const key = mode + '|' + limit;
+      const hit = cacheTop[key];
+      if (hit && Date.now() - hit.t < TOP_TTL_MS) {
+        return resp({ ok: true, v: VERSION, mode: mode, total: hit.total, top: hit.list, cached: 1 });
+      }
+      const tn = cacheTotal[mode];
+      const total = (tn && Date.now() - tn.t < TOTAL_TTL_MS)
+        ? tn.n
+        : (await col.where({ mode: mode }).count()).total;
+      cacheTotal[mode] = { t: Date.now(), n: total };
       const r = await col.where({ mode: mode }).orderBy('score', 'desc').limit(limit).get();
       const top = (r.data || []).map(function (d, i) {
         return { rank: i + 1, name: d.name || '匿名玩家', score: d.score || 0, diff: d.diff || 'normal' };
       });
+      cacheTop[key] = { t: Date.now(), total: total, list: top };
       return resp({ ok: true, v: VERSION, mode: mode, total: total, top: top });
     }
 
@@ -106,12 +128,18 @@ exports.main = async (event) => {
       if (!/^[A-Za-z0-9_-]{4,24}$/.test(uid)) return bad('bad_uid');
       const r = await col.where({ mode: mode, uid: uid }).limit(1).get();
       if (!r.data || r.data.length === 0) {
-        const total = (await col.where({ mode: mode }).count()).total;
-        return resp({ ok: true, v: VERSION, mode: mode, found: false, total: total });
+        const tn0 = cacheTotal[mode];
+        const t0 = (tn0 && Date.now() - tn0.t < TOTAL_TTL_MS)
+          ? tn0.n : (await col.where({ mode: mode }).count()).total;
+        cacheTotal[mode] = { t: Date.now(), n: t0 };
+        return resp({ ok: true, v: VERSION, mode: mode, found: false, total: t0 });
       }
       const mine = r.data[0];
       const better = (await col.where({ mode: mode, score: cmd.gt(mine.score || 0) }).count()).total;
-      const total = (await col.where({ mode: mode }).count()).total;
+      const tn = cacheTotal[mode];
+      const total = (tn && Date.now() - tn.t < TOTAL_TTL_MS)
+        ? tn.n : (await col.where({ mode: mode }).count()).total;
+      cacheTotal[mode] = { t: Date.now(), n: total };
       return resp({
         ok: true, v: VERSION, mode: mode, found: true,
         rank: better + 1, score: mine.score || 0, name: mine.name || '匿名玩家',
@@ -127,6 +155,19 @@ exports.main = async (event) => {
       const diff = DIFFS.indexOf(String(p.diff || '').toLowerCase()) >= 0
         ? String(p.diff).toLowerCase() : 'normal';
       const name = cleanName(p.name);
+      const now = Date.now();
+      const hk = mode + '|' + uid;
+      if (Object.keys(lastHit).length > 3000) {
+        Object.keys(lastHit).forEach(function (k) { delete lastHit[k]; });
+      }
+      const prev = lastHit[hk];
+      if (prev && now - prev.t < SUBMIT_GAP_MS && score <= prev.best) {
+        // 6 秒内重复（或更差）的提交：直接丢弃，一次数据库都不碰
+        return resp({
+          ok: true, v: VERSION, mode: mode, cooldown: 1,
+          rank: prev.rank, score: prev.best, isBest: false, total: prev.total || 0
+        });
+      }
 
       const r = await col.where({ mode: mode, uid: uid }).limit(1).get();
       let best = score;
@@ -134,16 +175,23 @@ exports.main = async (event) => {
         const old = r.data[0];
         const oldScore = old.score || 0;
         best = Math.max(oldScore, score);
-        if (score > oldScore || name !== (old.name || '')) {
-          await col.doc(old._id).update({ name: name, score: best, diff: diff, ts: Date.now() });
+        if (score > oldScore || name !== (old.name || '') || diff !== (old.diff || '')) {
+          await col.doc(old._id).update({ name: name, score: best, diff: diff, ts: now });
+          dropTopCache(mode);
         }
       } else {
-        await col.add({ mode: mode, uid: uid, name: name, score: score, diff: diff, ts: Date.now() });
+        await col.add({ mode: mode, uid: uid, name: name, score: score, diff: diff, ts: now });
+        dropTopCache(mode);
+        delete cacheTotal[mode];
       }
-      const better = (await col.where({ mode: mode, score: cmd.gt(best) }).count()).total;
-      const total = (await col.where({ mode: mode }).count()).total;
+      const rank = (await col.where({ mode: mode, score: cmd.gt(best) }).count()).total + 1;
+      const tn = cacheTotal[mode];
+      const total = (tn && now - tn.t < TOTAL_TTL_MS)
+        ? tn.n : (await col.where({ mode: mode }).count()).total;
+      cacheTotal[mode] = { t: now, n: total };
+      lastHit[hk] = { t: now, rank: rank, best: best, total: total };
       return resp({
-        ok: true, v: VERSION, mode: mode, rank: better + 1,
+        ok: true, v: VERSION, mode: mode, rank: rank,
         score: best, isBest: score >= best, total: total
       });
     }
