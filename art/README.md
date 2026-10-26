@@ -61,13 +61,12 @@ python3 art/push_files.py <文件清单.txt> "提交信息"
 
 | 路径 | 内容 | 能不能删 |
 |---|---|---|
-| `chibi/raw/` | AI 原始图 5 张 jpg | **不能**，唯一原始件 |
-| `chibi/cut/` | 最终采用的一轮切图（01_pot ~ 05_happy） | 不能 |
+| `chibi/raw/` | AI 原始图 5 张 jpg | **不能**，唯一原始件（已入库） |
+| `chibi/cut/` | 最终采用的一轮切图（01_pot ~ 05_happy） | 不能（已入库） |
 | `chibi/bbox.json` | 切图包围盒 | 不能 |
 | `ref/` | 参考图（face.png、deepseek-chan.jpg） | 不能 |
 | `canon.json` | 归一化基准（画布 613×617、头部质心） | 不能 |
 | `norm2.js` `gen_assets.js` `gen_icon.js` `trim_basin.js` `gen_audio.py` `push_files.py` | 可复现的生成/推送脚本，**幂等** | 不能 |
-| `attempts/` | 历史中间产物：另两轮切图（`cut_v2/` `cut_v3/`）、预览图、mock、一次性脚本（`scripts/`） | 可以 |
 
-`attempts/` 全是"当时试出来的东西"，留着当过程记录；删掉不影响任何成品，
-因为成品由上面的脚本从 `chibi/raw/` 重新生成。
+历史尝试目录（`attempts/`：另两轮切图、预览图、mock、一次性脚本）已于 2026-10-26
+按用户确认清理，不影响成品。这条流水线的源码和工具已能从 `chibi/raw/` 重新生成一切。
