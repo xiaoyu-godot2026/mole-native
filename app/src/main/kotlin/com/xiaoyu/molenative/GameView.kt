@@ -213,6 +213,8 @@ class GameView(context: Context) : View(context) {
     private var goodCount = 0
     private var missCount = 0
     private var notesTotal = 0
+    private var judgeSum = 0L
+    private var judgeCnt = 0
     private var lastSongPos = -1L
     private var wallOnly = false
     private var gameStartAt = 0L
@@ -1495,6 +1497,16 @@ class GameView(context: Context) : View(context) {
             )
             canvas.drawRoundRect(tmp, nh * 0.42f, nh * 0.42f, pFill)
         }
+
+        // 前奏/间奏/尾奏：离下一个音符还远时给个提示，别让人以为卡住了
+        val nxt = if (nextBeat < chart.size) chart[nextBeat].t else -1L
+        if (nxt > 0L && nxt - nowMs > 1400L) {
+            pText.textAlign = Paint.Align.CENTER
+            pText.style = Paint.Style.FILL
+            pText.textSize = h * 0.30f
+            pText.color = 0x661E4C6E
+            canvas.drawText("间奏", vw * 0.5f, top + h * 0.66f, pText)
+        }
     }
 
     private fun drawOverlay(canvas: Canvas) {
@@ -1614,6 +1626,16 @@ class GameView(context: Context) : View(context) {
                 canvas.drawText("最大连击 ×$maxCombo", vw * 0.5f, pt + ph * 0.50f, pText)
             } else {
                 canvas.drawText("最大连击 ×$maxCombo", vw * 0.5f, pt + ph * 0.47f, pText)
+            }
+            if (mode == Mode.RHYTHM && judgeCnt >= 8) {
+                val avg = (judgeSum.toFloat() / judgeCnt).roundToInt()
+                pText.textSize = pw * 0.032f
+                pText.color = if (abs(avg) > 25) cRed else cInkSoft
+                canvas.drawText(
+                    "判定平均偏差 " + (if (avg >= 0) "+" else "") + avg + "ms" +
+                            (if (abs(avg) > 25) "（设置里可调偏移）" else ""),
+                    vw * 0.5f, pt + ph * 0.545f, pText
+                )
             }
             pText.textSize = pw * 0.046f
             val b0 = if (mode == Mode.RHYTHM) best else bestClassic
@@ -1827,6 +1849,15 @@ class GameView(context: Context) : View(context) {
             if (pc % 9 == 4) hits = 3
             else if (pc % 4 == 2 && hits < 2) hits = 2
             if (k + hits > m.count) hits = 1
+            // 多拍怪必须"后面几拍真的有鼓点"才成立：音乐只剩一两拍时降成单拍，
+            // 免得玩家纠结"这一下到底该不该点"
+            if (hits > 1) {
+                var run = 1
+                for (j in 1 until hits) {
+                    if (k + j < m.count && m.energyAt(k + j) >= cut) run++ else break
+                }
+                hits = run
+            }
             val t = (m.time(k) + judgeOffset).toLong()
             val off = (hash(k + 37) * NC).toInt().coerceIn(0, NC - 1)
             var idx = -1
@@ -1900,6 +1931,8 @@ class GameView(context: Context) : View(context) {
         notesTotal += 1
         if (perfect) perfectCount += 1 else goodCount += 1
         Diag.judge(rawErr.toInt())
+        judgeSum += rawErr
+        judgeCnt += 1
 
         c.basinHp -= 1
         c.basinShakeAt = nowMs
@@ -2336,6 +2369,8 @@ class GameView(context: Context) : View(context) {
         goodCount = 0
         missCount = 0
         notesTotal = 0
+        judgeSum = 0L
+        judgeCnt = 0
         fx.clear()
         basins.clear()
         for (c in cells) {

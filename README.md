@@ -3,7 +3,7 @@
 用「鲸鱼娘」角色做的打地鼠 + 音游混合小游戏。原生 Android，Kotlin + Canvas 自绘，**零第三方依赖**。
 
 - 包名：`com.xiaoyu.molenative`
-- 当前版本：**3.7.2**（versionCode 24）
+- 当前版本：**3.7.3**（versionCode 25）
 - 最低支持：Android 8.0（minSdk 26）
 - 安装包：约 5.6 MB（CI 产物 5.63 MB）
 
