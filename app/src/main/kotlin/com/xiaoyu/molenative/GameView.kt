@@ -1053,7 +1053,7 @@ class GameView(context: Context) : View(context) {
             phase == Phase.PLAYING && mode == Mode.RHYTHM -> true
             else -> audio.soundOn
         }
-        if (on) audio.resumeBgm() else audio.pauseBgm()
+        if (on) audio.startBgm() else audio.pauseBgm()
     }
 
     private fun pickBgm() {
