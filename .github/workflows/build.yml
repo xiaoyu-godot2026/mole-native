@@ -22,11 +22,18 @@ jobs:
         with:
           gradle-version: '8.7'
 
-      - name: Build debug APK
-        run: gradle :app:assembleDebug --no-daemon --stacktrace
+      - name: Build APK
+        run: gradle :app:assembleRelease :app:assembleDebug --no-daemon --stacktrace
 
-      - name: Upload APK
+      # 上架/分发用：release 包（同一个固定签名，后面更新才能覆盖安装）
+      - name: Upload release APK
         uses: actions/upload-artifact@v4
         with:
           name: game-apk
+          path: app/build/outputs/apk/release/*.apk
+
+      - name: Upload debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: game-apk-debug
           path: app/build/outputs/apk/debug/*.apk
