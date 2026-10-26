@@ -230,6 +230,9 @@ class GameView(context: Context) : View(context) {
     private var overNote = ""               // 结算页的云端状态
     private var cloudBusy = false
 
+    /** 上架单机版开关：false = 不带任何联网功能（云榜单、在线曲库全部关闭，Manifest 里也没有网络权限） */
+    private val online = false
+
     private var showBoard = false
     private var boardTab = 0                // 0 音游 / 1 经典
     private var boardLoading = false
@@ -906,7 +909,18 @@ class GameView(context: Context) : View(context) {
         }
 
         button(canvas, btnPickBgm, "更换本地音乐", false)
-        button(canvas, btnLib, "在线曲库（Jamendo 免费授权）", false)
+        if (online) {
+            button(canvas, btnLib, "在线曲库（Jamendo 免费授权）", false)
+        } else {
+            pFill.color = 0x0F1E4C6E
+            canvas.drawRoundRect(btnLib, btnLib.height() * 0.32f, btnLib.height() * 0.32f, pFill)
+            pText.textAlign = Paint.Align.CENTER
+            pText.style = Paint.Style.FILL
+            pText.textSize = btnLib.height() * 0.32f
+            pText.color = 0x881E4C6E.toInt()
+            canvas.drawText("在线曲库已关闭（上架版不联网，见上方“更换本地音乐”）",
+                btnLib.centerX(), btnLib.centerY() + pText.textSize * 0.35f, pText)
+        }
 
         pText.textAlign = Paint.Align.CENTER
         pText.textSize = ph * 0.026f
@@ -956,7 +970,7 @@ class GameView(context: Context) : View(context) {
                     }
                     btnLib.contains(x, y) -> {
                         dragSld = -1
-                        openLib()
+                        if (online) openLib()
                     }
                     sldSfxHit.contains(x, y) -> {
                         dragSld = 0
@@ -1170,7 +1184,19 @@ class GameView(context: Context) : View(context) {
         boardErr = ""
         boardRows = emptyList()
         boardSelfRank = -1
-        loadBoard()
+        if (online) loadBoard() else loadLocalBoard()
+    }
+
+    /** 单机版：榜上只有本机最高分 */
+    private fun loadLocalBoard() {
+        boardLoading = false
+        boardErr = ""
+        val b = if (boardTab == 0) best else bestClassic
+        boardTotal = if (b > 0) 1 else 0
+        boardRows = if (b > 0) listOf(Cloud.Row(1, nick, b, diffKey())) else emptyList()
+        boardSelfRank = if (b > 0) 1 else -1
+        boardSelfScore = b
+        invalidate()
     }
 
     private fun loadBoard() {
@@ -1227,7 +1253,10 @@ class GameView(context: Context) : View(context) {
         canvas.drawText("排行榜", vw * 0.5f, pt + ph * 0.062f, pText)
         pText.textSize = pw * 0.030f
         pText.color = cInkSoft
-        canvas.drawText("云端 · 共 " + boardTotal + " 人上榜", vw * 0.5f, pt + ph * 0.098f, pText)
+        canvas.drawText(
+            if (online) "云端 · 共 " + boardTotal + " 人上榜" else "本机记录（单机版，不上传）",
+            vw * 0.5f, pt + ph * 0.098f, pText
+        )
 
         val tw = (pw * 0.84f) / 2f
         val tl = vw * 0.5f - pw * 0.42f
@@ -1305,7 +1334,10 @@ class GameView(context: Context) : View(context) {
         pText.textAlign = Paint.Align.CENTER
         pText.textSize = ph * 0.018f
         pText.color = cInkSoft
-        canvas.drawText("成绩由本机上报，仅供娱乐", vw * 0.5f, pt + ph * 0.935f, pText)
+        canvas.drawText(
+            if (online) "成绩由本机上报，仅供娱乐" else "单机版：分数只存这台手机",
+            vw * 0.5f, pt + ph * 0.935f, pText
+        )
     }
 
     private fun touchRankPanel(e: MotionEvent, x: Float, y: Float) {
@@ -1313,19 +1345,19 @@ class GameView(context: Context) : View(context) {
         if (tabR[0].contains(x, y)) {
             if (boardTab != 0) {
                 boardTab = 0
-                loadBoard()
+                if (online) loadBoard() else loadLocalBoard()
             }
             return
         }
         if (tabR[1].contains(x, y)) {
             if (boardTab != 1) {
                 boardTab = 1
-                loadBoard()
+                if (online) loadBoard() else loadLocalBoard()
             }
             return
         }
         if (btnBoardRefresh.contains(x, y)) {
-            loadBoard()
+            if (online) loadBoard() else loadLocalBoard()
             return
         }
         if (btnBoardClose.contains(x, y)) {
@@ -2454,7 +2486,9 @@ class GameView(context: Context) : View(context) {
             }
         }
         overNote = ""
-        if (score > 0) {
+        if (!online) {
+            overNote = "本机最高 " + (if (mode == Mode.RHYTHM) best else bestClassic) + " 分"
+        } else if (score > 0) {
             val m2 = if (mode == Mode.RHYTHM) "rhythm" else "classic"
             Diag.run("cloud", "submit")
             Cloud.submit(m2, uid, nick, score, diffKey()) { ok, rank ->
