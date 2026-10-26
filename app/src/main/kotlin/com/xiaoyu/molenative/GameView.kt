@@ -230,8 +230,8 @@ class GameView(context: Context) : View(context) {
     private var overNote = ""               // 结算页的云端状态
     private var cloudBusy = false
 
-    /** 上架单机版开关：false = 不带任何联网功能（云榜单、在线曲库全部关闭，Manifest 里也没有网络权限） */
-    private val online = false
+    /** 联网开关：true = 云榜单 + 在线曲库可用（GitHub 分发版全功能）；false = 单机阉割版 */
+    private val online = true
 
     private var showBoard = false
     private var boardTab = 0                // 0 音游 / 1 经典
