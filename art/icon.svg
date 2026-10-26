@@ -1,0 +1,89 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 108 108" width="108" height="108">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0.25" y2="1">
+      <stop offset="0" stop-color="#53C982"/><stop offset="0.5" stop-color="#2F9C58"/><stop offset="1" stop-color="#12603A"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.5" cy="0.28" r="0.6">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.18"/><stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="hole" cx="0.5" cy="0.2" r="0.85">
+      <stop offset="0" stop-color="#33200F"/><stop offset="1" stop-color="#150C06"/>
+    </radialGradient>
+    <linearGradient id="fur" x1="0.2" y1="0" x2="0.8" y2="1">
+      <stop offset="0" stop-color="#C08A5A"/><stop offset="0.55" stop-color="#9A6739"/><stop offset="1" stop-color="#714A27"/>
+    </linearGradient>
+    <linearGradient id="grass" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#45B873"/><stop offset="1" stop-color="#1B7743"/>
+    </linearGradient>
+    <clipPath id="shape"><rect x="0" y="0" width="108" height="108" rx="23"/></clipPath>
+  </defs>
+
+  <g clip-path="url(#shape)">
+    <rect width="108" height="108" fill="url(#bg)"/>
+    <rect width="108" height="108" fill="url(#glow)"/>
+
+    <!-- ears -->
+    <circle cx="31" cy="40" r="8.4" fill="#7A4F2A"/>
+    <circle cx="77" cy="40" r="8.4" fill="#7A4F2A"/>
+    <circle cx="31" cy="40" r="4.2" fill="#D89E76"/>
+    <circle cx="77" cy="40" r="4.2" fill="#D89E76"/>
+
+    <!-- head -->
+    <ellipse cx="54" cy="55" rx="26.5" ry="27" fill="url(#fur)"/>
+    <!-- muzzle -->
+    <ellipse cx="54" cy="66.5" rx="15" ry="11.5" fill="#F5DDBC"/>
+    <!-- eyes -->
+    <ellipse cx="45" cy="53.5" rx="5.6" ry="6.3" fill="#FFFFFF"/>
+    <ellipse cx="63" cy="53.5" rx="5.6" ry="6.3" fill="#FFFFFF"/>
+    <circle cx="45.9" cy="54.6" r="3.15" fill="#22130A"/>
+    <circle cx="63.9" cy="54.6" r="3.15" fill="#22130A"/>
+    <circle cx="44.7" cy="53.1" r="1.15" fill="#FFFFFF"/>
+    <circle cx="62.7" cy="53.1" r="1.15" fill="#FFFFFF"/>
+    <circle cx="47.2" cy="56.1" r="0.7" fill="#FFFFFF" opacity="0.8"/>
+    <circle cx="65.2" cy="56.1" r="0.7" fill="#FFFFFF" opacity="0.8"/>
+    <!-- nose -->
+    <ellipse cx="54" cy="62.5" rx="4.3" ry="3.3" fill="#EC7C92"/>
+    <ellipse cx="52.7" cy="61.4" rx="1.5" ry="1" fill="#FFB3C1" opacity="0.85"/>
+    <!-- smile -->
+    <path d="M54 65.8 V68.3 M54 68.3 q-3.1 2.3 -5.1 -0.4 M54 68.3 q3.1 2.3 5.1 -0.4"
+          stroke="#8B5636" stroke-width="1.5" fill="none" stroke-linecap="round"/>
+    <!-- cheeks -->
+    <ellipse cx="39" cy="66" rx="3.6" ry="2.3" fill="#F093A1" opacity="0.65"/>
+    <ellipse cx="69" cy="66" rx="3.6" ry="2.3" fill="#F093A1" opacity="0.65"/>
+
+
+    <!-- mallet -->
+    <g transform="translate(86 18) rotate(28)">
+      <rect x="-1.9" y="-2" width="3.8" height="26" rx="1.9" fill="#B4763F"/>
+      <rect x="-1.9" y="-2" width="1.5" height="26" rx="0.75" fill="#D19A63" opacity="0.7"/>
+      <rect x="-10" y="-9" width="20" height="11" rx="4" fill="#E0574F"/>
+      <rect x="-10" y="-9" width="20" height="4.2" rx="2.1" fill="#F0766C"/>
+      <rect x="-10" y="-9" width="20" height="11" rx="4" fill="none" stroke="#B93B35" stroke-width="1.1"/>
+    </g>
+    <!-- hole -->
+    <ellipse cx="54" cy="88" rx="33" ry="10.5" fill="#5B3A22"/>
+    <ellipse cx="54" cy="87" rx="29" ry="7.8" fill="url(#hole)"/>
+    <path d="M27 86.4 q27 -5.6 54 0" stroke="#7E5736" stroke-width="1.6" fill="none" opacity="0.65" stroke-linecap="round"/>
+
+    <!-- paws -->
+    <g fill="#8C5B33">
+      <ellipse cx="32" cy="86" rx="7.4" ry="4.2" transform="rotate(-10 32 86)"/>
+    </g>
+    <g fill="#C68F65">
+      <circle cx="29.2" cy="85" r="1.7"/><circle cx="32.4" cy="84.2" r="1.8"/><circle cx="35.4" cy="85" r="1.6"/>
+    </g>
+    <g fill="#8C5B33">
+      <ellipse cx="76" cy="86" rx="7.4" ry="4.2" transform="rotate(10 76 86)"/>
+    </g>
+    <g fill="#C68F65">
+      <circle cx="72.6" cy="85" r="1.6"/><circle cx="75.6" cy="84.2" r="1.8"/><circle cx="78.8" cy="85" r="1.7"/>
+    </g>
+
+    <!-- grass -->
+    <path d="M2 108 q4 -14 11 -18 q-3 11 1 18 Z" fill="url(#grass)"/>
+    <path d="M12 108 q2 -9 8 -12 q-2 8 0 12 Z" fill="#47BC76"/>
+    <path d="M106 108 q-4 -14 -11 -18 q3 11 -1 18 Z" fill="url(#grass)"/>
+    <path d="M96 108 q-2 -9 -8 -12 q2 8 0 12 Z" fill="#47BC76"/>
+  </g>
+  <rect x="0.5" y="0.5" width="107" height="107" rx="23" fill="none" stroke="#0D4426" stroke-width="1" opacity="0.4"/>
+</svg>

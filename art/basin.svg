@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 160" width="256" height="160">
+  <defs>
+    <linearGradient id="m" x1="0" y1="0" x2="0.2" y2="1">
+      <stop offset="0" stop-color="#E9EEF4"/><stop offset="0.45" stop-color="#B9C4CF"/>
+      <stop offset="1" stop-color="#7C8896"/>
+    </linearGradient>
+    <linearGradient id="rim" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#F3F7FB"/><stop offset="1" stop-color="#A9B5C2"/>
+    </linearGradient>
+  </defs>
+  <!-- 盆身 -->
+  <path d="M18 62 C18 62 26 132 128 132 C230 132 238 62 238 62 Z" fill="url(#m)"/>
+  <!-- 盆口 -->
+  <ellipse cx="128" cy="62" rx="110" ry="34" fill="url(#rim)"/>
+  <ellipse cx="128" cy="64" rx="96" ry="26" fill="#7E8B99"/>
+  <ellipse cx="128" cy="72" rx="96" ry="22" fill="#9FAAB6"/>
+  <!-- 高光 -->
+  <path d="M52 78 C60 110 92 122 128 122" stroke="#FFFFFF" stroke-width="9" fill="none" opacity="0.65" stroke-linecap="round"/>
+  <path d="M168 100 q26 -14 34 -34" stroke="#FFFFFF" stroke-width="6" fill="none" opacity="0.4" stroke-linecap="round"/>
+  <!-- 小凹痕 -->
+  <ellipse cx="186" cy="104" rx="12" ry="7" fill="#6E7A87" opacity="0.5"/>
+</svg>

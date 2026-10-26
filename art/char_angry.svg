@@ -1,0 +1,87 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 420" width="512" height="420">
+
+  <!-- 后发 -->
+  <ellipse cx="256" cy="186" rx="166" ry="152" fill="#3E6FE0"/>
+  <ellipse cx="256" cy="160" rx="148" ry="128" fill="#6FA8FF" opacity="0.45"/>
+  <!-- 垂在肩前的两缕 -->
+  <path d="M126 180 C112 250 116 322 136 378 C164 350 170 276 164 196 Z" fill="#3E6FE0"/>
+  <path d="M386 180 C400 250 396 322 376 378 C348 350 342 276 348 196 Z" fill="#3E6FE0"/>
+  <path d="M140 196 C130 254 134 312 148 348 C160 320 162 258 158 202 Z" fill="#6FA8FF" opacity="0.45"/>
+  <path d="M372 196 C382 254 378 312 364 348 C352 320 350 258 354 202 Z" fill="#6FA8FF" opacity="0.45"/>
+  <!-- 脸 -->
+  <ellipse cx="256" cy="198" rx="106" ry="100" fill="#FFE3D1"/>
+  <ellipse cx="256" cy="214" rx="94" ry="82" fill="#FFEFE6" opacity="0.55"/>
+
+
+  <!-- 齐刘海 + 三个发尖 -->
+  <path d="M146 150 C146 100 198 56 256 56 C314 56 366 100 366 150 Z" fill="#3E6FE0"/>
+  <path d="M182 148 L204 182 L226 148 Z" fill="#3E6FE0"/>
+  <path d="M236 148 L256 188 L276 148 Z" fill="#3E6FE0"/>
+  <path d="M286 148 L308 182 L330 148 Z" fill="#3E6FE0"/>
+  <!-- 发丝反光 -->
+  <path d="M196 96 C210 116 214 138 212 148" stroke="#6FA8FF" stroke-width="11" opacity="0.55" fill="none" stroke-linecap="round"/>
+  <path d="M240 88 C250 110 252 134 250 148" stroke="#6FA8FF" stroke-width="9" opacity="0.45" fill="none" stroke-linecap="round"/>
+  <path d="M300 96 C290 116 286 138 288 148" stroke="#6FA8FF" stroke-width="10" opacity="0.45" fill="none" stroke-linecap="round"/>
+
+
+  <!-- 女仆头饰：一条蕾丝带贴在发顶 -->
+  <path d="M162 122 C190 72 222 54 256 54 C290 54 322 72 350 122"
+        stroke="#FFFFFF" stroke-width="21" fill="none" stroke-linecap="round"/>
+  <g fill="#FFFFFF">
+    <circle cx="172" cy="112" r="9"/><circle cx="192" cy="90" r="9"/>
+    <circle cx="216" cy="72" r="10"/><circle cx="244" cy="62" r="10"/>
+    <circle cx="268" cy="62" r="10"/><circle cx="296" cy="72" r="10"/>
+    <circle cx="320" cy="90" r="9"/><circle cx="340" cy="112" r="9"/>
+  </g>
+  <!-- 蝴蝶结 -->
+  <g transform="translate(348 126) rotate(16)">
+    <path d="M0 0 C-26 -19 -42 4 -21 14 C-8 20 0 10 0 0 Z" fill="#4A7BE8"/>
+    <path d="M0 0 C26 -19 42 4 21 14 C8 20 0 10 0 0 Z" fill="#4A7BE8"/>
+    <circle cx="0" cy="5" r="7" fill="#2B4FBF"/>
+  </g>
+  <!-- 月牙发饰 -->
+  <g transform="translate(176 116)">
+    <path d="M0 0 a15 15 0 1 0 13 24 a11 11 0 1 1 -13 -24 z" fill="#FFFFFF"/>
+  </g>
+
+
+  <!-- 眼睛（生气 ><） -->
+  <path d="M192 200 L232 218 L192 236" stroke="#2B4FBF" stroke-width="19" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M320 200 L280 218 L320 236" stroke="#2B4FBF" stroke-width="19" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+  <!-- 嘴（嘟嘴） -->
+  <path d="M240 274 q16 -12 32 0 q-16 10 -32 0 z" fill="#E8798E"/>
+  <!-- 腮红 -->
+  <ellipse cx="180" cy="256" rx="21" ry="12" fill="#FFA8B8" opacity="0.8"/>
+  <ellipse cx="332" cy="256" rx="21" ry="12" fill="#FFA8B8" opacity="0.8"/>
+  <!-- 怒气符号 -->
+  <g stroke="#FF5A5A" stroke-width="7" fill="none" stroke-linecap="round" opacity="0.95">
+    <path d="M150 118 L166 134 M166 118 L150 134"/>
+    <path d="M346 118 L362 134 M362 118 L346 134"/>
+  </g>
+
+
+  <!-- 身体：海军蓝女仆裙 + 白围裙 -->
+  <path d="M186 300 C160 312 146 340 142 372 L130 420 L382 420 L370 372 C366 340 352 312 326 300 Z" fill="#26305C"/>
+  <path d="M258 300 L254 420 L382 420 L370 372 C366 340 352 312 326 300 Z" fill="#33417A" opacity="0.55"/>
+  <path d="M206 322 C188 340 180 372 178 420 L334 420 C332 372 324 340 306 322 Z" fill="#FFFFFF"/>
+  <path d="M206 322 C222 338 290 338 306 322 C300 316 212 316 206 322 Z" fill="#DCE8FF"/>
+  <path d="M256 322 L256 420" stroke="#DCE8FF" stroke-width="4" opacity="0.8"/>
+  <!-- 领口与蝴蝶结 -->
+  <path d="M228 296 q28 18 56 0 q-28 -14 -56 0 z" fill="#FFFFFF"/>
+  <g transform="translate(256 312)">
+    <path d="M0 0 C-20 -14 -32 4 -16 12 C-6 17 0 8 0 0 Z" fill="#4A7BE8"/>
+    <path d="M0 0 C20 -14 32 4 16 12 C6 17 0 8 0 0 Z" fill="#4A7BE8"/>
+    <circle cx="0" cy="5" r="6" fill="#2B4FBF"/>
+  </g>
+  <!-- 手臂 -->
+  <path d="M182 316 C160 344 152 380 154 408 C168 414 182 402 186 380 Z" fill="#26305C"/>
+  <path d="M330 316 C352 344 360 380 358 408 C344 414 330 402 326 380 Z" fill="#26305C"/>
+  <path d="M158 396 q14 12 28 2 q-2 18 -14 22 q-14 -2 -14 -24 z" fill="#FFE3D1"/>
+  <path d="M354 396 q-14 12 -28 2 q2 18 14 22 q14 -2 14 -24 z" fill="#FFE3D1"/>
+  <!-- 鲸鱼尾 -->
+  <path d="M348 404 C392 386 430 358 452 322 C466 346 468 380 452 404
+           C464 414 468 428 462 440 C440 428 400 420 356 420 Z" fill="#6FA8FF"/>
+  <path d="M348 404 C392 386 430 358 452 322 C462 338 466 356 462 372
+           C436 386 396 400 356 412 Z" fill="#3E6FE0" opacity="0.55"/>
+
+</svg>

@@ -32,11 +32,11 @@ API = 'https://api.github.com/repos/%s/%s' % (OWNER, REPO)
 BRIDGE = 'http://127.0.0.1:3090'
 HDR = '/root/.dsh/.bridge_headers'
 
-WATCH_DIRS = ('app/', 'docs/', 'tools/', '.github/', 'h5/')
+WATCH_DIRS = ('app/', 'docs/', 'tools/', '.github/', 'h5/', 'art/')
 WATCH_FILES = ('README.md', 'build.gradle', 'settings.gradle', 'gradle.properties',
-               'art/README.md', 'art/gen_audio.py', 'art/push_files.py', '交接说明.md')
+               '交接说明.md')
 SKIP_EXT = ('.apk', '.zip', '.log')
-SKIP_PARTS = ('art/attempts/',)   # 历史尝试不进仓库
+SKIP_PARTS = ('art/attempts/', '__pycache__/', '.git/')   # 历史尝试不进仓库（原始件 art/chibi/raw 必进）
 LAST_APK = None
 
 
@@ -64,6 +64,8 @@ def gh(method, path, payload=None):
 
 
 def watched(p):
+    if p.startswith(SKIP_PARTS) or p.endswith(SKIP_EXT):
+        return False
     return p.startswith(WATCH_DIRS) or p in WATCH_FILES
 
 
