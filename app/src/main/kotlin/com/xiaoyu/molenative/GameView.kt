@@ -705,7 +705,7 @@ class GameView(context: Context) : View(context) {
         btnResetBgm.set(l, by, l + third, by + bh)
         btnVib.set(l + third + gap, by, l + third * 2f + gap, by + bh)
         btnMusic.set(l + (third + gap) * 2f, by, r, by + bh)
-        btnCloseSet.set(l, panel.bottom - ph * 0.135f, r, panel.bottom - ph * 0.045f)
+        btnCloseSet.set(l, panel.bottom - ph * 0.150f, r, panel.bottom - ph * 0.064f)
     }
 
     private fun drawSettings(canvas: Canvas) {
@@ -781,6 +781,13 @@ class GameView(context: Context) : View(context) {
         button(canvas, btnVib, if (audio.vibOn) "震动 开" else "震动 关", audio.vibOn, 0.36f)
         button(canvas, btnMusic, if (audio.musicOn) "音乐 开" else "音乐 关", audio.musicOn, 0.36f)
         button(canvas, btnCloseSet, "完成", true)
+
+        // 版权标注：角色原型 + AI 生成说明 + 非商用
+        pText.textAlign = Paint.Align.CENTER
+        pText.textSize = ph * 0.022f
+        pText.color = cInkSoft
+        canvas.drawText("角色原型 ZipZipPipe · 美术/音乐：AI 生成 · 非商用",
+            panel.centerX(), panel.bottom - ph * 0.026f, pText)
     }
 
     private fun button(canvas: Canvas, rect: RectF, label: String, solid: Boolean, ts: Float = 0.46f) {

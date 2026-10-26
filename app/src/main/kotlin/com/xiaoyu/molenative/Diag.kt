@@ -1,29 +1,31 @@
 package com.xiaoyu.molenative
 
-import android.content.ClipData
-import android.content.ClipboardManager
 import android.content.Context
 import android.os.Build
+import android.util.Log
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
 /**
- * 设备侧诊断。
+ * 设备侧诊断（v3.6 起走 logcat，不再往剪贴板写）。
  *
- * 存在的理由：这个容器读不到手机的 /sdcard（/app/readfile 被桥拒绝），
- * 唯一能把设备上的文字送出来的通道是系统剪贴板（助手侧用 /app/clip 读）。
- * 所以诊断结果统一压成一个短文本块塞进剪贴板；同时落一份文件备用。
+ * 为什么改：设备 shell 已通，助手一条命令就能读到结构化数据
+ *   /root/dsh-bin/dev "logcat -d -s MoleDiag"
+ * 剪贴板那条老路（每局结束覆盖用户自己复制的内容）属于冗余，删掉。
  *
- * 目标不是"能打日志"，而是让助手在一次游玩后拿到可调参的数字：
+ * 目标不变：一次游玩后能拿到可调参的数字 ——
  * bpm / 谱面拍数 / 判定误差分布 / 帧率 / 音量 / 偏移量 / 崩溃栈。
+ * 另外仍落一份文件在 App 外部私有目录 files/diag.log 备用。
  */
 object Diag {
 
+    private const val TAG = "MoleDiag"
     private const val PRE = "diag"
     private const val MAX_FILE = 120 * 1024
     private const val TAIL_MAX = 24
+    private const val CHUNK = 3000
 
     // 判定误差直方图：-250..+250ms，20ms 一格，25 格
     private const val HIST_N = 25
@@ -69,10 +71,11 @@ object Diag {
                 if (lc.isNotEmpty()) {
                     prevCrash = lc
                     sp.edit().putString("lastCrash", "").commit()
-                    copy(c, "上次崩溃\n" + lc)
                 }
             } catch (t: Throwable) {
             }
+            Log.i(TAG, "boot " + headLine())
+            if (prevCrash.isNotEmpty()) logText("prevcrash", prevCrash)
         }
         installCrash()
     }
@@ -86,18 +89,25 @@ object Diag {
         "?"
     }
 
+    private fun headLine(): String {
+        val sb = StringBuilder()
+        for ((k, v) in head) sb.append(k).append('=').append(v).append(' ')
+        return sb.toString().trim()
+    }
+
     private fun installCrash() {
         val prev = Thread.getDefaultUncaughtExceptionHandler()
         Thread.setDefaultUncaughtExceptionHandler { t, e ->
             try {
-                val block = summary() + "\nSTACK " + t.name + "\n" +
-                    android.util.Log.getStackTraceString(e)
-                appendFile("=== CRASH ===\n" + block)
+                val stack = Log.getStackTraceString(e)
+                val block = summary()
+                appendFile("=== CRASH ===\n" + block + "\nSTACK " + t.name + "\n" + stack)
+                Log.e(TAG, "CRASH " + t.name + "\n" + stack)
+                logText("crash", block)
                 val c = ctx
                 if (c != null) {
                     c.getSharedPreferences(PRE, Context.MODE_PRIVATE).edit()
                         .putString("lastCrash", block.take(6000)).commit()
-                    copy(c, block.take(8000))
                 }
             } catch (x: Throwable) {
             }
@@ -105,12 +115,14 @@ object Diag {
         }
     }
 
-    /** 记一条事件（只进内存环形缓冲，summary 时带出去） */
+    /** 记一条事件（内存环形缓冲 + 实时进 logcat） */
     fun line(tag: String, msg: String) {
+        val s = msg.take(160)
         synchronized(lock) {
-            tail.add(fmt.format(Date()) + " " + tag + " " + msg.take(160))
+            tail.add(fmt.format(Date()) + " " + tag + " " + s)
             while (tail.size > TAIL_MAX) tail.removeAt(0)
         }
+        Log.i(TAG, "evt " + tag + " " + s)
     }
 
     /** 记一个本局指标；同名覆盖，顺序即输出顺序 */
@@ -220,20 +232,29 @@ object Diag {
             " in85%=" + pct + " big=" + histBig
     }
 
-    /** 把当前摘要写进剪贴板（返回是否成功），并落文件 */
-    fun publish(reason: String): Boolean {
-        val c = ctx ?: return false
+    /** 结算/退出/启动失败时调用：摘要落文件 + 整段写进 logcat（TAG=MoleDiag） */
+    fun publish(reason: String) {
         val text = summary()
         appendFile("=== " + reason + " ===\n" + text)
-        return copy(c, text)
+        logText(reason, text)
     }
 
-    private fun copy(c: Context, text: String): Boolean = try {
-        val cm = c.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-        cm.setPrimaryClip(ClipData.newPlainText("打鲸鲸诊断", text))
-        true
-    } catch (t: Throwable) {
-        false
+    /** 长文本按行切成 <=3000 字符的块写 logcat，避免被单行上限截断 */
+    private fun logText(prefix: String, text: String) {
+        try {
+            val s = text.replace("\r", "")
+            var i = 0
+            while (i < s.length) {
+                var end = minOf(i + CHUNK, s.length)
+                if (end < s.length) {
+                    val nl = s.lastIndexOf('\n', end - 1)
+                    if (nl > i + 200) end = nl + 1
+                }
+                Log.i(TAG, "[" + prefix + "] " + s.substring(i, end))
+                i = end
+            }
+        } catch (t: Throwable) {
+        }
     }
 
     private fun appendFile(text: String) {
