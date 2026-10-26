@@ -32,10 +32,11 @@ API = 'https://api.github.com/repos/%s/%s' % (OWNER, REPO)
 BRIDGE = 'http://127.0.0.1:3090'
 HDR = '/root/.dsh/.bridge_headers'
 
-WATCH_DIRS = ('app/', 'docs/', 'tools/', '.github/')
+WATCH_DIRS = ('app/', 'docs/', 'tools/', '.github/', 'h5/')
 WATCH_FILES = ('README.md', 'build.gradle', 'settings.gradle', 'gradle.properties',
-               'art/README.md', 'art/gen_audio.py', 'art/push_files.py')
+               'art/README.md', 'art/gen_audio.py', 'art/push_files.py', '交接说明.md')
 SKIP_EXT = ('.apk', '.zip', '.log')
+SKIP_PARTS = ('art/attempts/',)   # 历史尝试不进仓库
 LAST_APK = None
 
 
