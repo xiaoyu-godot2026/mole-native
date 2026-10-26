@@ -54,16 +54,21 @@ class GameAudio(private val ctx: Context) {
     var vibOn: Boolean = sp.getBoolean("vibOn", true)
 
     /**
-     * 对局中是否放背景音乐。
-     * 只管**经典模式**：开始界面一直有音乐，音游模式的曲子是游戏本体、不受这个开关影响。
-     * 默认关 = 保持原有手感（经典对局只有音效）。
+     * 声音总开关（v3.8）：关掉 = 主界面、经典对局、结算既不放音乐也不出音效。
+     * 唯一例外是音游对局：那首曲子就是游戏本体，静音了就没法跟着鼓点敲，所以照常播。
      */
-    var musicOn: Boolean = sp.getBoolean("musicOn", false)
+    var soundOn: Boolean = sp.getBoolean("soundOn", true)
         set(v) {
             field = v
             try {
-                sp.edit().putBoolean("musicOn", v).apply()
+                sp.edit().putBoolean("soundOn", v).apply()
             } catch (t: Throwable) {
+            }
+            if (!v) {
+                try {
+                    mp?.pause()
+                } catch (t: Throwable) {
+                }
             }
         }
 
@@ -199,6 +204,7 @@ class GameAudio(private val ctx: Context) {
     }
 
     fun play(c: Int, rate: Float = 1f, volScale: Float = 1f) {
+        if (!soundOn) return
         if (sfxVol <= 0.01f) return
         val p = pool ?: return
         if (c < 0 || c >= N || sids[c] == 0) return

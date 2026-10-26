@@ -432,8 +432,10 @@ class GameView(context: Context) : View(context) {
         drawFlyBasins(canvas)
         drawHud(canvas)
         if (phase != Phase.PLAYING) drawOverlay(canvas)
-        if (showSettings) drawSettings(canvas)
         if (paused) drawPause(canvas)
+        // 设置按钮画在暗色遮罩之上：以前画在 HUD 里，开始/结算一压就发灰，看不出能点
+        if (!showSettings && !showBoard && !showLib && !paused) drawGear(canvas)
+        if (showSettings) drawSettings(canvas)
         if (showBoard) drawRankPanel(canvas)
         if (showLib) drawLibPanel(canvas)
         canvas.restore()
@@ -725,33 +727,9 @@ class GameView(context: Context) : View(context) {
             canvas.drawRoundRect(tmp, th2 / 2f, th2 / 2f, pFill)
         }
 
-        // 声音设置入口（右上角）：做成实心白底 + 深色图标 + 文字，避免"看起来点不了"
+        // 设置入口（右上角）：位置在这里算，图标放到 drawGear 里最后画，避免被遮罩压灰
         val gs = hudH * 0.30f
         gearR.set(vw - dp(8f) - gs, hudH * 0.04f, vw - dp(8f), hudH * 0.04f + gs)
-        pFill.color = 0xF2FFFFFF.toInt()
-        canvas.drawRoundRect(gearR, gs * 0.30f, gs * 0.30f, pFill)
-        pStroke.color = 0x331E4C6E
-        pStroke.strokeWidth = max(dp(1.2f), gs * 0.035f)
-        canvas.drawRoundRect(gearR, gs * 0.30f, gs * 0.30f, pStroke)
-        val gc = 0xFF1E4C6E.toInt()
-        pStroke.color = gc
-        pStroke.strokeWidth = max(dp(2f), gs * 0.075f)
-        pFill.color = gc
-        val gx = gearR.centerX()
-        val gy = gearR.centerY() - gs * 0.04f
-        val lw = gs * 0.36f
-        val step = gs * 0.145f
-        for (k in -1..1) {
-            val ly = gy + step * k
-            canvas.drawLine(gx - lw, ly, gx + lw, ly, pStroke)
-        }
-        canvas.drawCircle(gx - lw * 0.50f, gy - step, gs * 0.068f, pFill)
-        canvas.drawCircle(gx + lw * 0.30f, gy, gs * 0.068f, pFill)
-        canvas.drawCircle(gx - lw * 0.05f, gy + step, gs * 0.068f, pFill)
-        pText.textAlign = Paint.Align.CENTER
-        pText.textSize = gs * 0.30f
-        pText.color = gc
-        canvas.drawText("设置", gearR.centerX(), gearR.bottom + gs * 0.34f, pText)
 
         // 暂停键（只有对局中才出现）
         if (phase == Phase.PLAYING) {
@@ -760,7 +738,7 @@ class GameView(context: Context) : View(context) {
             pauseBtnR.set(gearR.left - gap - ps, gearR.top, gearR.left - gap, gearR.top + ps)
             pFill.color = 0x3DFFFFFF
             canvas.drawRoundRect(pauseBtnR, ps * 0.32f, ps * 0.32f, pFill)
-            pFill.color = gc
+            pFill.color = cInk
             val bw = ps * 0.085f
             val bh = ps * 0.36f
             val cx2 = pauseBtnR.centerX()
@@ -772,6 +750,48 @@ class GameView(context: Context) : View(context) {
         } else {
             pauseBtnR.setEmpty()
         }
+    }
+
+    /** 设置按钮：画在所有遮罩的最上层，白底 + 投影 + 深色图标 + 白底标签，一眼能看出能点 */
+    private fun drawGear(canvas: Canvas) {
+        val gs = gearR.width()
+        if (gs <= 1f) return
+        // 投影
+        pShadow.color = 0x66091E2E
+        tmp.set(gearR.left, gearR.top + gs * 0.07f, gearR.right, gearR.bottom + gs * 0.07f)
+        canvas.drawRoundRect(tmp, gs * 0.30f, gs * 0.30f, pShadow)
+        // 白底
+        pFill.color = Color.WHITE
+        canvas.drawRoundRect(gearR, gs * 0.30f, gs * 0.30f, pFill)
+        pStroke.color = cInk
+        pStroke.strokeWidth = max(dp(1.4f), gs * 0.040f)
+        canvas.drawRoundRect(gearR, gs * 0.30f, gs * 0.30f, pStroke)
+        // 图标
+        pStroke.color = cInk
+        pStroke.strokeWidth = max(dp(2f), gs * 0.075f)
+        pFill.color = cInk
+        val gx = gearR.centerX()
+        val gy = gearR.centerY() - gs * 0.04f
+        val lw = gs * 0.36f
+        val step = gs * 0.145f
+        for (k in -1..1) {
+            val ly = gy + step * k
+            canvas.drawLine(gx - lw, ly, gx + lw, ly, pStroke)
+        }
+        canvas.drawCircle(gx - lw * 0.50f, gy - step, gs * 0.068f, pFill)
+        canvas.drawCircle(gx + lw * 0.30f, gy, gs * 0.068f, pFill)
+        canvas.drawCircle(gx - lw * 0.05f, gy + step, gs * 0.068f, pFill)
+        // 标签（白底药丸，压在暗色遮罩上也清楚）
+        val tw = gs * 1.10f
+        val th2 = gs * 0.42f
+        tmp.set(gx - tw / 2f, gearR.bottom + gs * 0.10f, gx + tw / 2f, gearR.bottom + gs * 0.10f + th2)
+        pFill.color = Color.WHITE
+        canvas.drawRoundRect(tmp, th2 / 2f, th2 / 2f, pFill)
+        pText.textAlign = Paint.Align.CENTER
+        pText.style = Paint.Style.FILL
+        pText.textSize = th2 * 0.62f
+        pText.color = cInk
+        canvas.drawText("设置", tmp.centerX(), tmp.centerY() + pText.textSize * 0.36f, pText)
     }
 
     private fun layoutSettings() {
@@ -899,13 +919,13 @@ class GameView(context: Context) : View(context) {
 
         button(canvas, btnResetBgm, "内置", !audio.bgmCustom, 0.38f)
         button(canvas, btnVib, if (audio.vibOn) "震动 开" else "震动 关", audio.vibOn, 0.34f)
-        button(canvas, btnMusic, if (audio.musicOn) "音乐 开" else "音乐 关", audio.musicOn, 0.34f)
+        button(canvas, btnMusic, if (audio.soundOn) "声音 开" else "声音 关", audio.soundOn, 0.34f)
         button(canvas, btnCloseSet, "完成", true)
 
         pText.textAlign = Paint.Align.CENTER
         pText.textSize = ph * 0.019f
         pText.color = cInkSoft
-        canvas.drawText("“音乐”只管经典模式；主界面和音游一直有音乐", panel.centerX(), panel.top + ph * 0.828f, pText)
+        canvas.drawText("声音是总开关：关掉后主界面、经典对局、结算全部静音", panel.centerX(), panel.top + ph * 0.828f, pText)
 
         // 版权标注：角色原型 + AI 生成说明 + 非商用
         pText.textAlign = Paint.Align.CENTER
@@ -967,9 +987,10 @@ class GameView(context: Context) : View(context) {
                     }
                     btnMusic.contains(x, y) -> {
                         dragSld = -1
-                        audio.musicOn = !audio.musicOn
-                        // 只影响经典对局；主界面/音游的音乐策略由 bgmPolicy 决定，不在这里改
-                        if (phase == Phase.PLAYING && mode == Mode.CLASSIC) bgmPolicy()
+                        audio.soundOn = !audio.soundOn
+                        if (audio.soundOn) audio.play(GameAudio.HIT2, 1f, 0.75f)
+                        // 总开关：立刻生效（主界面/经典/结算都跟着变，音游对局不受影响）
+                        bgmPolicy()
                     }
                     btnCloseSet.contains(x, y) -> closeSettings()
                     !panel.contains(x, y) -> closeSettings()
@@ -1025,13 +1046,12 @@ class GameView(context: Context) : View(context) {
         lastFrame = 0L
     }
 
-    /** 背景音乐策略：开始界面与音游永远有音乐；经典对局看开关；结算静音 */
+    /** 背景音乐策略（v3.8）：总开关关 = 哪里都不放；唯一例外是音游对局，那首曲子就是游戏本体 */
     private fun bgmPolicy() {
         val on = when {
-            phase == Phase.READY -> true
             phase == Phase.OVER -> false
-            mode == Mode.RHYTHM -> true
-            else -> audio.musicOn
+            phase == Phase.PLAYING && mode == Mode.RHYTHM -> true
+            else -> audio.soundOn
         }
         if (on) audio.resumeBgm() else audio.pauseBgm()
     }
@@ -2465,7 +2485,7 @@ class GameView(context: Context) : View(context) {
         Diag.run("vol", "sfx" + (audio.sfxVol * 100).roundToInt() + "/bgm" + (audio.bgmVol * 100).roundToInt())
         Diag.run("off", (if (judgeOffset >= 0) "+" else "") + judgeOffset)
         Diag.run("vib", if (audio.vibOn) 1 else 0)
-        Diag.run("music", if (audio.musicOn) 1 else 0)
+        Diag.run("music", if (audio.soundOn) 1 else 0)
         Diag.run("mapErr", if (mapErr.isEmpty()) "-" else mapErr)
         Diag.run("uid", uid)
         Diag.run("diff", diffName())
@@ -2545,7 +2565,7 @@ class GameView(context: Context) : View(context) {
         lastSongPos = -1L
         wallOnly = false
         audio.setLooping(true)
-        audio.restartBgm()
+        if (audio.soundOn) audio.restartBgm() else audio.pauseBgm()
         invalidate()
     }
 
@@ -2606,8 +2626,9 @@ class GameView(context: Context) : View(context) {
     fun onResumeAudio() {
         try {
             if (paused) audio.pauseBgm()
-            else if (phase == Phase.READY) audio.startBgm()
-            else {
+            else if (phase == Phase.READY) {
+                if (audio.soundOn) audio.startBgm() else audio.pauseBgm()
+            } else {
                 bgmPolicy()
                 if (phase == Phase.PLAYING && mode == Mode.RHYTHM) resyncRhythmClock()
             }
