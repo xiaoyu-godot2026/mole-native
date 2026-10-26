@@ -72,9 +72,9 @@ class GameView(context: Context) : View(context) {
     companion object {
         private const val COLS = 3
         private const val ROWS = 3
-        private const val SCORE_SILVER = 10     // 银盆基础分（敲 1 拍）
-        private const val SCORE_BLUE = 30       // 蓝盆基础分（连敲 3 拍）
-        private const val SCORE_GREEN = 50      // 绿盆基础分（连敲 2 拍）
+        private const val SCORE_SILVER = 10     // 银盆每敲 1 下
+        private const val SCORE_BLUE = 18       // 蓝盆每敲 1 下（总共敲 3 下）
+        private const val SCORE_GREEN = 14      // 绿盆每敲 1 下（总共敲 2 下）
         private const val DEATH_SHOW_MS = 340L  // 盆飞走后先露出原表情
         private const val DEATH_DIZZY_MS = 620L // 晕 + 左右晃两下
         private const val NC = COLS * ROWS
@@ -92,10 +92,46 @@ class GameView(context: Context) : View(context) {
         private const val W_GOOD = 165L         // Good 窗口
         private const val MISS_PENALTY = 4
         private const val START_SKIP_MS = 1200L
+
+        // 难度：0 简单 / 1 普通 / 2 困难（默认普通）
+        private val DIFF_NAMES = arrayOf("简单", "普通", "困难")
+        private val DIFF_KEYS = arrayOf("easy", "normal", "hard")
+        private val DIFF_MUL = floatArrayOf(0.85f, 1.0f, 1.25f)      // 音游得分倍率
+        private val DIFF_SPAWN = floatArrayOf(1.14f, 1.0f, 0.88f)    // 经典出怪间隔倍率
+        private val DIFF_ALIVE = intArrayOf(2, 3, 4)                 // 经典同屏上限
+        private val DIFF_BLUE = floatArrayOf(0.60f, 0.50f, 0.35f)    // 银→蓝 的分界
+        private val DIFF_GREEN = floatArrayOf(0.85f, 0.80f, 0.65f)   // 蓝→绿 的分界
+        private val DIFF_WEAK = floatArrayOf(0.62f, 0.25f, 0.10f)    // 弱拍放行阈值（越小越密）
+        private val DIFF_SKIP = floatArrayOf(0.20f, 0.06f, 0.02f)    // 整拍丢弃率
     }
 
     private val sp = resources.displayMetrics.density
     private fun dp(v: Float) = v * sp
+
+    private fun newUid(): String {
+        val abc = "abcdefghjkmnpqrstuvwxyz23456789"
+        val sb = StringBuilder()
+        for (k in 0 until 8) sb.append(abc[Random.nextInt(abc.length)])
+        return sb.toString()
+    }
+
+    private fun dLevel() = diff.coerceIn(0, 2)
+    private fun diffName() = DIFF_NAMES[dLevel()]
+    private fun diffKey() = DIFF_KEYS[dLevel()]
+    private fun scoreMul() = DIFF_MUL[dLevel()]
+
+    private fun saveBoardPref(k: String, v: Any) {
+        try {
+            val e = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+            when (v) {
+                is Int -> e.putInt(k, v)
+                is String -> e.putString(k, v)
+                else -> return
+            }
+            e.apply()
+        } catch (t: Throwable) {
+        }
+    }
 
     private val cDeep = Color.rgb(11, 47, 73)
     private val cPool = Color.rgb(18, 58, 86)
@@ -187,6 +223,40 @@ class GameView(context: Context) : View(context) {
     private val chart = ArrayList<Note>()
     private var btnRect2 = RectF()
 
+    // ---------------- 身份 / 难度 / 云榜 ----------------
+    private var diff = 1                    // 0 简单 / 1 普通 / 2 困难
+    private var uid = ""
+    private var nick = ""
+    private var overNote = ""               // 结算页的云端状态
+    private var cloudBusy = false
+
+    private var showBoard = false
+    private var boardTab = 0                // 0 音游 / 1 经典
+    private var boardLoading = false
+    private var boardErr = ""
+    private var boardRows: List<Cloud.Row> = emptyList()
+    private var boardTotal = 0
+    private var boardSelfRank = -1
+    private var boardSelfScore = 0
+    private val btnBoard = RectF()          // 主界面「排行榜」
+    private val btnBoardClose = RectF()
+    private val btnBoardRefresh = RectF()
+    private val tabR = arrayOf(RectF(), RectF())
+    private val diffChip = arrayOf(RectF(), RectF(), RectF())
+
+    // ---------------- 曲库 ----------------
+    private var showLib = false
+    private var libBusy = false
+    private var libStatus = ""
+    private var libQuery = ""
+    private var libPage = 0
+    private var libTracks: List<MusicLib.Track> = emptyList()
+    private val libSearchR = RectF()
+    private val libPrevR = RectF()
+    private val libNextR = RectF()
+    private val libCloseR = RectF()
+    private val libRows = Array(6) { RectF() }
+
     private val bubbles = Array(26) {
         floatArrayOf(
             Random.nextFloat(), Random.nextFloat(), 0.4f + Random.nextFloat() * 0.9f, 6f + Random.nextFloat() * 16f
@@ -215,12 +285,27 @@ class GameView(context: Context) : View(context) {
     private val btnCloseSet = RectF()
     private val sldOffTrack = RectF()
     private val sldOffHit = RectF()
+    private val btnNick = RectF()
+    private val btnLib = RectF()
 
     init {
         Diag.boot(ctx)
-        best = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getInt("best", 0)
-        judgeOffset = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getInt("judgeOffset", 0)
-        bestClassic = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getInt("bestC", 0)
+        val sp0 = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        best = sp0.getInt("best", 0)
+        judgeOffset = sp0.getInt("judgeOffset", 0)
+        bestClassic = sp0.getInt("bestC", 0)
+        diff = sp0.getInt("diff", 1).coerceIn(0, 2)
+        uid = sp0.getString("uid", "") ?: ""
+        nick = sp0.getString("nick", "") ?: ""
+        if (uid.length < 6) {
+            uid = newUid()
+            sp0.edit().putString("uid", uid).apply()
+        }
+        if (nick.isEmpty()) {
+            nick = "玩家" + uid.takeLast(3).uppercase()
+            sp0.edit().putString("nick", nick).apply()
+        }
+        Diag.line("id", uid + "/" + nick)
         isClickable = true
         ensureMap()
         setOnApplyWindowInsetsListener { _, insets ->
@@ -345,6 +430,8 @@ class GameView(context: Context) : View(context) {
         if (phase != Phase.PLAYING) drawOverlay(canvas)
         if (showSettings) drawSettings(canvas)
         if (paused) drawPause(canvas)
+        if (showBoard) drawRankPanel(canvas)
+        if (showLib) drawLibPanel(canvas)
         canvas.restore()
 
         if (phase != Phase.READY && !paused) postInvalidateOnAnimation()
@@ -677,35 +764,38 @@ class GameView(context: Context) : View(context) {
     }
 
     private fun layoutSettings() {
-        val pw = vw * 0.86f
-        val ph = min(pw * 1.32f, vh * 0.74f)
+        val pw = vw * 0.93f
+        val ph = min(pw * 1.55f, vh * 0.90f)
         panel.set((vw - pw) / 2f, (vh - ph) / 2f, (vw + pw) / 2f, (vh + ph) / 2f)
 
-        val l = panel.left + pw * 0.07f
-        val r = panel.right - pw * 0.07f
-        val trackL = l + pw * 0.22f
-        val trackR = r - pw * 0.22f
+        val l = panel.left + pw * 0.06f
+        val r = panel.right - pw * 0.06f
+        val trackL = l + pw * 0.24f
+        val trackR = r - pw * 0.24f
 
-        val y1 = panel.top + ph * 0.215f
-        val y2 = panel.top + ph * 0.305f
-        val y3 = panel.top + ph * 0.395f
+        btnNick.set(l, panel.top + ph * 0.078f, r, panel.top + ph * 0.135f)
+
+        val y1 = panel.top + ph * 0.225f
+        val y2 = panel.top + ph * 0.300f
+        val y3 = panel.top + ph * 0.375f
         sldSfxTrack.set(trackL, y1, trackR, y1)
         sldBgmTrack.set(trackL, y2, trackR, y2)
         sldOffTrack.set(trackL, y3, trackR, y3)
-        val ht = ph * 0.032f
-        sldSfxHit.set(trackL - ht, y1 - ht * 1.5f, trackR + ht, y1 + ht * 1.5f)
-        sldBgmHit.set(trackL - ht, y2 - ht * 1.5f, trackR + ht, y2 + ht * 1.5f)
-        sldOffHit.set(trackL - ht, y3 - ht * 1.5f, trackR + ht, y3 + ht * 1.5f)
+        val ht = ph * 0.030f
+        sldSfxHit.set(trackL - ht, y1 - ht * 1.4f, trackR + ht, y1 + ht * 1.4f)
+        sldBgmHit.set(trackL - ht, y2 - ht * 1.4f, trackR + ht, y2 + ht * 1.4f)
+        sldOffHit.set(trackL - ht, y3 - ht * 1.4f, trackR + ht, y3 + ht * 1.4f)
 
-        val bh = ph * 0.108f
-        btnPickBgm.set(l, panel.top + ph * 0.535f, r, panel.top + ph * 0.535f + bh)
-        val gap = pw * 0.04f
+        val bh = ph * 0.085f
+        btnPickBgm.set(l, panel.top + ph * 0.450f, r, panel.top + ph * 0.450f + bh)
+        btnLib.set(l, panel.top + ph * 0.590f, r, panel.top + ph * 0.590f + bh)
+        val gap = pw * 0.03f
         val third = (r - l - gap * 2f) / 3f
-        val by = panel.top + ph * 0.725f
+        val by = panel.top + ph * 0.730f
         btnResetBgm.set(l, by, l + third, by + bh)
         btnVib.set(l + third + gap, by, l + third * 2f + gap, by + bh)
         btnMusic.set(l + (third + gap) * 2f, by, r, by + bh)
-        btnCloseSet.set(l, panel.bottom - ph * 0.150f, r, panel.bottom - ph * 0.064f)
+        btnCloseSet.set(l, panel.bottom - ph * 0.130f, r, panel.bottom - ph * 0.052f)
     }
 
     private fun drawSettings(canvas: Canvas) {
@@ -719,17 +809,34 @@ class GameView(context: Context) : View(context) {
         canvas.drawRoundRect(panel, dp(20f), dp(20f), pFill)
 
         val ph = panel.height()
-        val l = panel.left + panel.width() * 0.07f
-        val r = panel.right - panel.width() * 0.07f
+        val l = panel.left + panel.width() * 0.06f
+        val r = panel.right - panel.width() * 0.06f
 
         pText.style = Paint.Style.FILL
         pText.textAlign = Paint.Align.CENTER
-        pText.textSize = ph * 0.066f
+        pText.textSize = ph * 0.050f
         pText.color = cInk
-        canvas.drawText("声音与判定", panel.centerX(), panel.top + ph * 0.105f, pText)
+        canvas.drawText("声音与判定", panel.centerX(), panel.top + ph * 0.047f, pText)
 
-        val th = ph * 0.019f
-        val knob = ph * 0.026f
+        // 昵称（点一下改）
+        pFill.color = 0x121E4C6E
+        canvas.drawRoundRect(btnNick, btnNick.height() * 0.30f, btnNick.height() * 0.30f, pFill)
+        pText.textAlign = Paint.Align.LEFT
+        pText.textSize = btnNick.height() * 0.40f
+        pText.color = cInk
+        canvas.drawText("昵称  " + nick, btnNick.left + btnNick.height() * 0.36f, btnNick.centerY() + pText.textSize * 0.35f, pText)
+        pText.textAlign = Paint.Align.RIGHT
+        pText.textSize = btnNick.height() * 0.32f
+        pText.color = cInkSoft
+        canvas.drawText("点击修改", btnNick.right - btnNick.height() * 0.36f, btnNick.centerY() + pText.textSize * 0.35f, pText)
+
+        pText.textAlign = Paint.Align.CENTER
+        pText.textSize = ph * 0.023f
+        pText.color = cInkSoft
+        canvas.drawText("ID " + uid, panel.centerX(), panel.top + ph * 0.163f, pText)
+
+        val th = ph * 0.014f
+        val knob = ph * 0.020f
         val labels = arrayOf("音效", "音乐", "判定偏移")
         val tracks = arrayOf(sldSfxTrack, sldBgmTrack, sldOffTrack)
         val vals = floatArrayOf(audio.sfxVol, audio.bgmVol, (judgeOffset + 200) / 400f)
@@ -742,14 +849,14 @@ class GameView(context: Context) : View(context) {
             val tr = tracks[k]
             val v = vals[k].coerceIn(0f, 1f)
             pText.textAlign = Paint.Align.LEFT
-            pText.textSize = ph * 0.040f
+            pText.textSize = ph * 0.030f
             pText.color = cInk
-            canvas.drawText(labels[k], l, tr.centerY() + ph * 0.014f, pText)
+            canvas.drawText(labels[k], l, tr.centerY() + ph * 0.011f, pText)
 
             pText.textAlign = Paint.Align.RIGHT
-            pText.textSize = ph * 0.036f
+            pText.textSize = ph * 0.027f
             pText.color = cInkSoft
-            canvas.drawText(txts[k], r, tr.centerY() + ph * 0.013f, pText)
+            canvas.drawText(txts[k], r, tr.centerY() + ph * 0.010f, pText)
 
             tmp.set(tr.left, tr.centerY() - th / 2f, tr.right, tr.centerY() + th / 2f)
             pFill.color = 0x241E4C6E
@@ -767,27 +874,29 @@ class GameView(context: Context) : View(context) {
             canvas.drawCircle(kx, tr.centerY(), knob, pStroke)
         }
 
-        button(canvas, btnPickBgm, "更换背景音乐", false)
+        button(canvas, btnPickBgm, "更换本地音乐", false)
+        button(canvas, btnLib, "在线曲库（Jamendo 免费授权）", false)
+
         pText.textAlign = Paint.Align.CENTER
-        pText.textSize = ph * 0.036f
+        pText.textSize = ph * 0.026f
         pText.color = cInkSoft
         val nm = audio.bgmName
-        canvas.drawText("当前：" + if (nm.length > 16) nm.substring(0, 16) + "…" else nm,
-            panel.centerX(), panel.top + ph * 0.672f, pText)
-        pText.textSize = ph * 0.030f
-        canvas.drawText("判定偏移：敲早了往正调，敲晚了往负调", panel.centerX(), panel.top + ph * 0.468f, pText)
+        canvas.drawText("当前：" + if (nm.length > 18) nm.substring(0, 18) + "…" else nm,
+            panel.centerX(), panel.top + ph * 0.562f, pText)
+        pText.textSize = ph * 0.024f
+        canvas.drawText("判定偏移：敲早了往正调，敲晚了往负调", panel.centerX(), panel.top + ph * 0.418f, pText)
 
-        button(canvas, btnResetBgm, "内置", !audio.bgmCustom, 0.40f)
-        button(canvas, btnVib, if (audio.vibOn) "震动 开" else "震动 关", audio.vibOn, 0.36f)
-        button(canvas, btnMusic, if (audio.musicOn) "音乐 开" else "音乐 关", audio.musicOn, 0.36f)
+        button(canvas, btnResetBgm, "内置", !audio.bgmCustom, 0.38f)
+        button(canvas, btnVib, if (audio.vibOn) "震动 开" else "震动 关", audio.vibOn, 0.34f)
+        button(canvas, btnMusic, if (audio.musicOn) "音乐 开" else "音乐 关", audio.musicOn, 0.34f)
         button(canvas, btnCloseSet, "完成", true)
 
         // 版权标注：角色原型 + AI 生成说明 + 非商用
         pText.textAlign = Paint.Align.CENTER
-        pText.textSize = ph * 0.022f
+        pText.textSize = ph * 0.020f
         pText.color = cInkSoft
-        canvas.drawText("角色原型 ZipZipPipe · 美术/音乐：AI 生成 · 非商用",
-            panel.centerX(), panel.bottom - ph * 0.026f, pText)
+        canvas.drawText("角色原型 ZipZipPipe · 美术/音乐由 AI 辅助生成 · 非商用",
+            panel.centerX(), panel.bottom - ph * 0.018f, pText)
     }
 
     private fun button(canvas: Canvas, rect: RectF, label: String, solid: Boolean, ts: Float = 0.46f) {
@@ -805,6 +914,14 @@ class GameView(context: Context) : View(context) {
         when (e.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
                 when {
+                    btnNick.contains(x, y) -> {
+                        dragSld = -1
+                        editNick()
+                    }
+                    btnLib.contains(x, y) -> {
+                        dragSld = -1
+                        openLib()
+                    }
                     sldSfxHit.contains(x, y) -> {
                         dragSld = 0
                         setSld(0, x)
@@ -921,6 +1038,387 @@ class GameView(context: Context) : View(context) {
         }
     }
 
+    // ---------------- 昵称 / 云榜 / 曲库 ----------------
+
+    private fun editNick() {
+        val act = ctx as? Activity ?: return
+        try {
+            val et = android.widget.EditText(act)
+            et.setText(nick)
+            et.setSelection(et.text.length)
+            et.filters = arrayOf(android.text.InputFilter.LengthFilter(12))
+            android.app.AlertDialog.Builder(act)
+                .setTitle("改个昵称（最多 12 字）")
+                .setView(et)
+                .setPositiveButton("保存") { _, _ ->
+                    val v = et.text.toString().replace("\n", "").trim()
+                    if (v.isNotEmpty()) {
+                        nick = v
+                        saveBoardPref("nick", nick)
+                        Diag.line("nick", nick)
+                        invalidate()
+                    }
+                }
+                .setNegativeButton("取消", null)
+                .show()
+        } catch (t: Throwable) {
+            Diag.line("nick", "dialog " + (t.message ?: ""))
+        }
+    }
+
+    private fun openLib() {
+        showLib = true
+        libBusy = false
+        if (libTracks.isEmpty()) libStatus = "点上面的搜索框，输入歌名或风格"
+        invalidate()
+    }
+
+    private fun askLibQuery() {
+        val act = ctx as? Activity ?: return
+        try {
+            val et = android.widget.EditText(act)
+            et.setText(libQuery)
+            et.setHint("例如：piano / lofi / 电子")
+            android.app.AlertDialog.Builder(act)
+                .setTitle("搜索免费曲库")
+                .setView(et)
+                .setPositiveButton("搜索") { _, _ ->
+                    val q = et.text.toString().trim()
+                    if (q.isNotEmpty()) doLibSearch(q)
+                }
+                .setNegativeButton("取消", null)
+                .show()
+        } catch (t: Throwable) {
+        }
+    }
+
+    private fun doLibSearch(q: String) {
+        libQuery = q
+        libBusy = true
+        libStatus = "正在搜索…"
+        libPage = 0
+        invalidate()
+        MusicLib.search(q) { list, err ->
+            libBusy = false
+            if (list != null) {
+                libTracks = list
+                libPage = 0
+                libStatus = "共 " + list.size + " 首，点一首下载后自动分析节拍"
+            } else {
+                libTracks = emptyList()
+                libStatus = err
+            }
+            invalidate()
+        }
+    }
+
+    private fun pickLibTrack(t: MusicLib.Track) {
+        if (libBusy) return
+        libBusy = true
+        libStatus = "正在下载：" + t.name
+        invalidate()
+        MusicLib.download(ctx, t) { f, err ->
+            libBusy = false
+            if (f != null) {
+                Diag.line("music", "pick " + t.name.take(30) + " " + (f.length() / 1024) + "KB")
+                audio.setBgm(Uri.fromFile(f), t.name + " - " + t.artist)
+                refreshMap()
+                showLib = false
+                showSettings = false
+                bgmPolicy()
+            } else {
+                libStatus = err
+                Diag.line("music", "pick fail " + err)
+            }
+            invalidate()
+        }
+    }
+
+    private fun openBoard() {
+        showBoard = true
+        boardErr = ""
+        boardRows = emptyList()
+        boardSelfRank = -1
+        loadBoard()
+    }
+
+    private fun loadBoard() {
+        boardLoading = true
+        boardErr = ""
+        invalidate()
+        val m = if (boardTab == 0) "rhythm" else "classic"
+        Cloud.top(m, 20) { rows, total, err ->
+            boardLoading = false
+            if (rows != null) {
+                boardRows = rows
+                boardTotal = total
+            } else {
+                boardErr = err
+            }
+            invalidate()
+        }
+        Cloud.rank(m, uid) { rk, sc, found ->
+            if (found == 1) {
+                boardSelfRank = rk
+                boardSelfScore = sc
+            } else {
+                boardSelfRank = -1
+                boardSelfScore = 0
+            }
+            invalidate()
+        }
+    }
+
+    private fun diffTag(k: String): String = when (k) {
+        "easy" -> "简单"
+        "hard" -> "困难"
+        else -> "普通"
+    }
+
+    private fun drawRankPanel(canvas: Canvas) {
+        pFill.shader = null
+        pFill.style = Paint.Style.FILL
+        pFill.color = 0xC0081420.toInt()
+        canvas.drawRect(0f, -insetTop, vw, vh, pFill)
+
+        val pw = vw * 0.92f
+        val ph = vh * 0.86f
+        val pl = (vw - pw) / 2f
+        val pt = (vh - ph) / 2f
+        pFill.color = 0xF7FBFDFF.toInt()
+        tmp.set(pl, pt, pl + pw, pt + ph)
+        canvas.drawRoundRect(tmp, dp(24f), dp(24f), pFill)
+
+        pText.style = Paint.Style.FILL
+        pText.textAlign = Paint.Align.CENTER
+        pText.textSize = pw * 0.070f
+        pText.color = cInk
+        canvas.drawText("排行榜", vw * 0.5f, pt + ph * 0.062f, pText)
+        pText.textSize = pw * 0.030f
+        pText.color = cInkSoft
+        canvas.drawText("云端 · 共 " + boardTotal + " 人上榜", vw * 0.5f, pt + ph * 0.098f, pText)
+
+        val tw = (pw * 0.84f) / 2f
+        val tl = vw * 0.5f - pw * 0.42f
+        val tabY = pt + ph * 0.130f
+        val tabH = ph * 0.058f
+        for (k in 0..1) {
+            tabR[k].set(tl + k * tw, tabY, tl + k * tw + tw - dp(6f), tabY + tabH)
+            val on = boardTab == k
+            pFill.color = if (on) cInk else 0x141E4C6E
+            canvas.drawRoundRect(tabR[k], tabH / 2f, tabH / 2f, pFill)
+            pText.textSize = tabH * 0.42f
+            pText.color = if (on) Color.WHITE else cInk
+            canvas.drawText(if (k == 0) "音游榜" else "经典榜", tabR[k].centerX(), tabR[k].centerY() + pText.textSize * 0.35f, pText)
+        }
+
+        val listTop = pt + ph * 0.212f
+        val rowH = ph * 0.042f
+        val rowN = 12
+        if (boardLoading && boardRows.isEmpty()) {
+            pText.textAlign = Paint.Align.CENTER
+            pText.textSize = pw * 0.040f
+            pText.color = cInkSoft
+            canvas.drawText("加载中…", vw * 0.5f, listTop + rowH * 3f, pText)
+        } else if (boardRows.isEmpty()) {
+            pText.textAlign = Paint.Align.CENTER
+            pText.textSize = pw * 0.038f
+            pText.color = if (boardErr.isEmpty()) cInkSoft else cRed
+            canvas.drawText(if (boardErr.isEmpty()) "还没有人上榜，去玩一局" else boardErr, vw * 0.5f, listTop + rowH * 3f, pText)
+        } else {
+            for (k in boardRows.indices) {
+                if (k >= rowN) break
+                val row = boardRows[k]
+                val y = listTop + rowH * k
+                if (k % 2 == 0) {
+                    pFill.color = 0x0A1E4C6E
+                    tmp.set(pl + pw * 0.05f, y, pl + pw * 0.95f, y + rowH * 0.94f)
+                    canvas.drawRoundRect(tmp, dp(8f), dp(8f), pFill)
+                }
+                pText.textAlign = Paint.Align.LEFT
+                pText.textSize = rowH * 0.52f
+                pText.color = when (row.rank) {
+                    1 -> Color.rgb(214, 150, 20)
+                    2 -> Color.rgb(120, 132, 148)
+                    3 -> Color.rgb(176, 112, 60)
+                    else -> cInkSoft
+                }
+                canvas.drawText(row.rank.toString(), pl + pw * 0.075f, y + rowH * 0.68f, pText)
+                pText.color = cInk
+                val nm = if (row.name.length > 6) row.name.substring(0, 6) + "…" else row.name
+                canvas.drawText(nm, pl + pw * 0.130f, y + rowH * 0.68f, pText)
+                pText.textAlign = Paint.Align.RIGHT
+                pText.color = Color.rgb(28, 122, 190)
+                canvas.drawText(row.score.toString(), pl + pw * 0.885f, y + rowH * 0.68f, pText)
+                pText.color = cInkSoft
+                pText.textSize = rowH * 0.34f
+                canvas.drawText(diffTag(row.diff), pl + pw * 0.945f, y + rowH * 0.68f, pText)
+            }
+        }
+
+        pText.textAlign = Paint.Align.CENTER
+        pText.textSize = pw * 0.034f
+        if (boardSelfRank > 0) {
+            pText.color = cInk
+            canvas.drawText("我的名次 第 " + boardSelfRank + " 名 · " + boardSelfScore + " 分", vw * 0.5f, pt + ph * 0.775f, pText)
+        } else {
+            pText.color = cInkSoft
+            canvas.drawText("我还没上榜（昵称 " + nick + "）", vw * 0.5f, pt + ph * 0.775f, pText)
+        }
+
+        btnBoardRefresh.set(pl + pw * 0.06f, pt + ph * 0.810f, vw * 0.5f - dp(8f), pt + ph * 0.885f)
+        button(canvas, btnBoardRefresh, "刷新", false)
+        btnBoardClose.set(vw * 0.5f + dp(8f), pt + ph * 0.810f, pl + pw * 0.94f, pt + ph * 0.885f)
+        button(canvas, btnBoardClose, "关闭", true)
+
+        pText.textAlign = Paint.Align.CENTER
+        pText.textSize = ph * 0.018f
+        pText.color = cInkSoft
+        canvas.drawText("成绩由本机上报，仅供娱乐", vw * 0.5f, pt + ph * 0.935f, pText)
+    }
+
+    private fun touchRankPanel(e: MotionEvent, x: Float, y: Float) {
+        if (e.action != MotionEvent.ACTION_DOWN) return
+        if (tabR[0].contains(x, y)) {
+            if (boardTab != 0) {
+                boardTab = 0
+                loadBoard()
+            }
+            return
+        }
+        if (tabR[1].contains(x, y)) {
+            if (boardTab != 1) {
+                boardTab = 1
+                loadBoard()
+            }
+            return
+        }
+        if (btnBoardRefresh.contains(x, y)) {
+            loadBoard()
+            return
+        }
+        if (btnBoardClose.contains(x, y)) {
+            showBoard = false
+            invalidate()
+        }
+    }
+
+    private fun drawLibPanel(canvas: Canvas) {
+        pFill.shader = null
+        pFill.style = Paint.Style.FILL
+        pFill.color = 0xC0081420.toInt()
+        canvas.drawRect(0f, -insetTop, vw, vh, pFill)
+
+        val pw = vw * 0.92f
+        val ph = vh * 0.86f
+        val pl = (vw - pw) / 2f
+        val pt = (vh - ph) / 2f
+        pFill.color = 0xF7FBFDFF.toInt()
+        tmp.set(pl, pt, pl + pw, pt + ph)
+        canvas.drawRoundRect(tmp, dp(24f), dp(24f), pFill)
+
+        pText.style = Paint.Style.FILL
+        pText.textAlign = Paint.Align.CENTER
+        pText.textSize = pw * 0.062f
+        pText.color = cInk
+        canvas.drawText("免费曲库", vw * 0.5f, pt + ph * 0.056f, pText)
+        pText.textSize = pw * 0.028f
+        pText.color = cInkSoft
+        canvas.drawText("Jamendo 曲库 · CC 授权，标注作者即可非商用", vw * 0.5f, pt + ph * 0.090f, pText)
+
+        libSearchR.set(pl + pw * 0.06f, pt + ph * 0.110f, pl + pw * 0.94f, pt + ph * 0.168f)
+        pFill.color = 0x141E4C6E
+        canvas.drawRoundRect(libSearchR, libSearchR.height() * 0.30f, libSearchR.height() * 0.30f, pFill)
+        pText.textAlign = Paint.Align.LEFT
+        pText.textSize = libSearchR.height() * 0.36f
+        pText.color = if (libQuery.isEmpty()) cInkSoft else cInk
+        canvas.drawText(if (libQuery.isEmpty()) "点这里搜索歌名 / 风格" else "搜索：" + libQuery,
+            libSearchR.left + libSearchR.height() * 0.36f, libSearchR.centerY() + pText.textSize * 0.35f, pText)
+        pText.textAlign = Paint.Align.RIGHT
+        pText.textSize = libSearchR.height() * 0.32f
+        pText.color = cInkSoft
+        canvas.drawText("搜索", libSearchR.right - libSearchR.height() * 0.36f, libSearchR.centerY() + pText.textSize * 0.35f, pText)
+
+        pText.textAlign = Paint.Align.CENTER
+        pText.textSize = pw * 0.028f
+        pText.color = if (libStatus.startsWith("连不上") || libStatus.startsWith("下载失败") || libStatus.startsWith("没搜到")) cRed else cInkSoft
+        if (libStatus.isNotEmpty()) canvas.drawText(libStatus, vw * 0.5f, pt + ph * 0.198f, pText)
+
+        val rowH = ph * 0.058f
+        val top = pt + ph * 0.225f
+        for (k in 0..5) {
+            libRows[k].set(pl + pw * 0.055f, top + rowH * k, pl + pw * 0.945f, top + rowH * (k + 1) - dp(6f))
+            val idx = libPage * 6 + k
+            val has = idx < libTracks.size
+            pFill.color = if (has) 0x101E4C6E else 0x081E4C6E
+            canvas.drawRoundRect(libRows[k], dp(8f), dp(8f), pFill)
+            if (!has) continue
+            val t = libTracks[idx]
+            pText.textAlign = Paint.Align.LEFT
+            pText.textSize = rowH * 0.30f
+            pText.color = cInk
+            val nm = if (t.name.length > 12) t.name.substring(0, 12) + "…" else t.name
+            canvas.drawText(nm, libRows[k].left + dp(10f), libRows[k].centerY() + pText.textSize * 0.06f, pText)
+            pText.textSize = rowH * 0.22f
+            pText.color = cInkSoft
+            val ar = if (t.artist.length > 10) t.artist.substring(0, 10) + "…" else t.artist
+            canvas.drawText(ar, libRows[k].left + dp(10f), libRows[k].centerY() + rowH * 0.30f, pText)
+            pText.textAlign = Paint.Align.RIGHT
+            pText.textSize = rowH * 0.26f
+            pText.color = cInkSoft
+            canvas.drawText(t.durText(), libRows[k].right - dp(12f), libRows[k].centerY() + pText.textSize * 0.20f, pText)
+        }
+
+        val by = pt + ph * 0.640f
+        libPrevR.set(pl + pw * 0.06f, by, vw * 0.5f - dp(8f), by + ph * 0.062f)
+        libNextR.set(vw * 0.5f + dp(8f), by, pl + pw * 0.94f, by + ph * 0.062f)
+        button(canvas, libPrevR, "上一页", false)
+        button(canvas, libNextR, "下一页", false)
+
+        pText.textAlign = Paint.Align.CENTER
+        pText.textSize = pw * 0.026f
+        pText.color = cInkSoft
+        canvas.drawText("选一首会先下载到手机，再分析节拍；第一次要等十几秒", vw * 0.5f, pt + ph * 0.735f, pText)
+
+        libCloseR.set(pl + pw * 0.15f, pt + ph * 0.800f, pl + pw * 0.85f, pt + ph * 0.880f)
+        button(canvas, libCloseR, "关闭", true)
+    }
+
+    private fun touchLibPanel(e: MotionEvent, x: Float, y: Float) {
+        if (e.action != MotionEvent.ACTION_DOWN) return
+        if (libSearchR.contains(x, y)) {
+            askLibQuery()
+            return
+        }
+        if (libCloseR.contains(x, y)) {
+            showLib = false
+            invalidate()
+            return
+        }
+        if (libBusy) return
+        if (libPrevR.contains(x, y)) {
+            if (libPage > 0) {
+                libPage--
+                invalidate()
+            }
+            return
+        }
+        if (libNextR.contains(x, y)) {
+            if ((libPage + 1) * 6 < libTracks.size) {
+                libPage++
+                invalidate()
+            }
+            return
+        }
+        for (i in 0..5) {
+            if (libRows[i].contains(x, y)) {
+                val idx = libPage * 6 + i
+                if (idx < libTracks.size) pickLibTrack(libTracks[idx])
+                return
+            }
+        }
+    }
+
     private fun drawChart(canvas: Canvas) {
         val m = map ?: return
         val l = vw * 0.055f
@@ -974,8 +1472,8 @@ class GameView(context: Context) : View(context) {
         pFill.color = 0xB3091E2E.toInt()
         canvas.drawRect(0f, -insetTop, vw, vh, pFill)
 
-        val pw = vw * 0.82f
-        val ph = vh * 0.52f
+        val pw = vw * 0.84f
+        val ph = min(vh * 0.68f, pw * 1.52f)
         val pl = (vw - pw) / 2f
         val pt = (vh - ph) / 2f
 
@@ -1011,7 +1509,7 @@ class GameView(context: Context) : View(context) {
                 canvas.drawText(mapErr, vw * 0.5f, pt + ph * 0.277f, pText)
             }
 
-            btnRect.set(vw * 0.5f - pw * 0.36f, pt + ph * 0.33f, vw * 0.5f + pw * 0.36f, pt + ph * 0.49f)
+            btnRect.set(vw * 0.5f - pw * 0.36f, pt + ph * 0.28f, vw * 0.5f + pw * 0.36f, pt + ph * 0.38f)
             pFill.color = if (map == null) 0xFFBFCBD6.toInt() else cGold
             canvas.drawRoundRect(btnRect, btnRect.height() / 2f, btnRect.height() / 2f, pFill)
             pText.textSize = btnRect.height() * 0.34f
@@ -1020,7 +1518,7 @@ class GameView(context: Context) : View(context) {
             pText.textSize = btnRect.height() * 0.21f
             canvas.drawText("看顶部谱面，鼓点到了就敲", btnRect.centerX(), btnRect.centerY() + btnRect.height() * 0.27f, pText)
 
-            btnRect2.set(vw * 0.5f - pw * 0.36f, pt + ph * 0.55f, vw * 0.5f + pw * 0.36f, pt + ph * 0.71f)
+            btnRect2.set(vw * 0.5f - pw * 0.36f, pt + ph * 0.405f, vw * 0.5f + pw * 0.36f, pt + ph * 0.505f)
             pFill.color = 0x181E4C6E
             canvas.drawRoundRect(btnRect2, btnRect2.height() / 2f, btnRect2.height() / 2f, pFill)
             pText.textSize = btnRect2.height() * 0.34f
@@ -1030,13 +1528,46 @@ class GameView(context: Context) : View(context) {
             pText.color = cInkSoft
             canvas.drawText("30 秒随便敲，没有音乐", btnRect2.centerX(), btnRect2.centerY() + btnRect2.height() * 0.27f, pText)
 
-            pText.textSize = pw * 0.034f
-            pText.color = cInkSoft
-            canvas.drawText("银盆敲 1 下 · 绿盆连敲 2 下 · 蓝盆连敲 3 下", vw * 0.5f, pt + ph * 0.775f, pText)
-
+            // 难度选择
+            pText.textAlign = Paint.Align.CENTER
             pText.textSize = pw * 0.040f
             pText.color = cInkSoft
-            canvas.drawText("音游最高 $best · 经典最高 $bestClassic", vw * 0.5f, pt + ph * 0.88f, pText)
+            canvas.drawText("难度", vw * 0.5f, pt + ph * 0.556f, pText)
+            val cw = pw * 0.245f
+            val cgap = pw * 0.030f
+            val c0 = vw * 0.5f - (cw * 3f + cgap * 2f) / 2f
+            for (k in 0..2) {
+                diffChip[k].set(
+                    c0 + k * (cw + cgap), pt + ph * 0.578f,
+                    c0 + k * (cw + cgap) + cw, pt + ph * 0.638f
+                )
+                val on = dLevel() == k
+                pFill.color = if (on) cInk else 0x141E4C6E
+                canvas.drawRoundRect(diffChip[k], diffChip[k].height() / 2f, diffChip[k].height() / 2f, pFill)
+                pText.textSize = diffChip[k].height() * 0.42f
+                pText.color = if (on) Color.WHITE else cInk
+                canvas.drawText(DIFF_NAMES[k], diffChip[k].centerX(), diffChip[k].centerY() + pText.textSize * 0.35f, pText)
+            }
+
+            // 排行榜入口
+            btnBoard.set(vw * 0.5f - pw * 0.30f, pt + ph * 0.668f, vw * 0.5f + pw * 0.30f, pt + ph * 0.732f)
+            pFill.color = 0x181E4C6E
+            canvas.drawRoundRect(btnBoard, btnBoard.height() / 2f, btnBoard.height() / 2f, pFill)
+            pText.textSize = btnBoard.height() * 0.40f
+            pText.color = cInk
+            canvas.drawText("排行榜", btnBoard.centerX(), btnBoard.centerY() + pText.textSize * 0.35f, pText)
+
+            pText.textSize = pw * 0.034f
+            pText.color = cInkSoft
+            canvas.drawText("银盆敲 1 下 · 绿盆连敲 2 下 · 蓝盆连敲 3 下", vw * 0.5f, pt + ph * 0.792f, pText)
+
+            pText.textSize = pw * 0.038f
+            pText.color = cInkSoft
+            canvas.drawText("音游最高 $best · 经典最高 $bestClassic", vw * 0.5f, pt + ph * 0.848f, pText)
+
+            pText.textSize = pw * 0.032f
+            pText.color = cInkSoft
+            canvas.drawText("昵称 $nick · 难度 " + diffName(), vw * 0.5f, pt + ph * 0.905f, pText)
         } else {
             pText.textSize = pw * 0.090f
             pText.color = cInk
@@ -1059,6 +1590,12 @@ class GameView(context: Context) : View(context) {
             val b0 = if (mode == Mode.RHYTHM) best else bestClassic
             canvas.drawText(if (score >= b0 && score > 0) "新纪录！" else "最高 $b0", vw * 0.5f, pt + ph * 0.58f, pText)
 
+            if (overNote.isNotEmpty()) {
+                pText.textSize = pw * 0.036f
+                pText.color = if (overNote.startsWith("云端")) cInkSoft else cRed
+                canvas.drawText(overNote, vw * 0.5f, pt + ph * 0.632f, pText)
+            }
+
             btnRect.set(vw * 0.5f - pw * 0.36f, pt + ph * 0.66f, vw * 0.5f + pw * 0.36f, pt + ph * 0.81f)
             pFill.color = cGold
             canvas.drawRoundRect(btnRect, btnRect.height() / 2f, btnRect.height() / 2f, pFill)
@@ -1078,8 +1615,8 @@ class GameView(context: Context) : View(context) {
         pFill.color = 0xB3091E2E.toInt()
         canvas.drawRect(0f, -insetTop, vw, vh, pFill)
 
-        val pw = vw * 0.74f
-        val ph = vh * 0.30f
+        val pw = vw * 0.84f
+        val ph = vh * 0.34f
         val pl = (vw - pw) / 2f
         val pt = (vh - ph) / 2f
 
@@ -1092,18 +1629,18 @@ class GameView(context: Context) : View(context) {
 
         pText.textAlign = Paint.Align.CENTER
         pText.style = Paint.Style.FILL
-        pText.textSize = pw * 0.10f
+        pText.textSize = pw * 0.095f
         pText.color = cInk
-        canvas.drawText("已暂停", vw * 0.5f, pt + ph * 0.20f, pText)
+        canvas.drawText("已暂停", vw * 0.5f, pt + ph * 0.18f, pText)
 
-        btnResume.set(pl + pw * 0.08f, pt + ph * 0.34f, pl + pw * 0.92f, pt + ph * 0.58f)
+        btnResume.set(pl + pw * 0.08f, pt + ph * 0.31f, pl + pw * 0.92f, pt + ph * 0.57f)
         pFill.color = cGold
         canvas.drawRoundRect(btnResume, btnResume.height() / 2f, btnResume.height() / 2f, pFill)
         pText.textSize = btnResume.height() * 0.40f
         pText.color = Color.rgb(92, 60, 5)
         canvas.drawText("继续", btnResume.centerX(), btnResume.centerY() + btnResume.height() * 0.14f, pText)
 
-        btnMenu.set(pl + pw * 0.08f, pt + ph * 0.64f, pl + pw * 0.92f, pt + ph * 0.88f)
+        btnMenu.set(pl + pw * 0.08f, pt + ph * 0.63f, pl + pw * 0.92f, pt + ph * 0.89f)
         pFill.color = 0x181E4C6E
         canvas.drawRoundRect(btnMenu, btnMenu.height() / 2f, btnMenu.height() / 2f, pFill)
         pText.textSize = btnMenu.height() * 0.40f
@@ -1191,7 +1728,7 @@ class GameView(context: Context) : View(context) {
         }
         if (nowMs >= nextSpawnAt) {
             spawnClassic()
-            val iv = max(360f, 830f - score * 11f)
+            val iv = max(360f, 830f - score * 11f) * DIFF_SPAWN[dLevel()]
             nextSpawnAt = nowMs + iv.toLong() + (Random.nextFloat() * 180f).toLong()
         }
     }
@@ -1230,10 +1767,13 @@ class GameView(context: Context) : View(context) {
         var lastCol = -1
         while (k < m.count) {
             val e = m.energyAt(k)
-            val strong = e > 165
-            val mid = e > 95
-            var place = if (mid) true else (hash(k * 13 + 5) > 0.25f)
-            if (hash(k) < 0.06f) place = false
+            val lv = dLevel()
+            val strongT = if (lv == 2) 150 else 165
+            val midT = if (lv == 2) 84 else 95
+            val strong = e > strongT
+            val mid = e > midT
+            var place = if (mid) true else (hash(k * 13 + 5) > DIFF_WEAK[lv])
+            if (hash(k) < DIFF_SKIP[lv]) place = false
             if (!place) {
                 k++
                 continue
@@ -1318,7 +1858,7 @@ class GameView(context: Context) : View(context) {
             else -> SCORE_SILVER
         }
         val bonus = min(combo / 10, 5)
-        val g = (base * mult).roundToInt() + bonus
+        val g = (base * mult * scoreMul()).roundToInt() + bonus
         score += g
         combo += 1
         if (combo > maxCombo) maxCombo = combo
@@ -1410,7 +1950,7 @@ class GameView(context: Context) : View(context) {
     private fun spawnClassic() {
         var count = 0
         for (c in cells) if (c.active) count++
-        if (count >= 3) return
+        if (count >= DIFF_ALIVE[dLevel()]) return
         val free = ArrayList<Int>()
         for (i in 0 until NC) if (!cells[i].active) free.add(i)
         if (free.isEmpty()) return
@@ -1422,9 +1962,11 @@ class GameView(context: Context) : View(context) {
         c.stateAt = nowMs
         c.retreatAt = 0L
         val roll = Random.nextFloat()
+        val tb = DIFF_BLUE[dLevel()]
+        val tg = DIFF_GREEN[dLevel()]
         c.basinColor = when {
-            roll < 0.50f -> 0
-            roll < 0.80f -> 1
+            roll < tb -> 0
+            roll < tg -> 1
             else -> 2
         }
         c.basinHp = when (c.basinColor) {
@@ -1505,9 +2047,9 @@ class GameView(context: Context) : View(context) {
         combo += 1
         if (combo > maxCombo) maxCombo = combo
         val base = when (c.basinColor) {
-            1 -> 3
-            2 -> 5
-            else -> 1
+            1 -> 3      // 蓝（要敲 3 下）
+            2 -> 2      // 绿（要敲 2 下）
+            else -> 1   // 银（敲 1 下）
         }
         val g = base + min(combo / 3, 3)
         score += g
@@ -1551,6 +2093,14 @@ class GameView(context: Context) : View(context) {
         val x = e.x
         val y = e.y - insetTop
 
+        if (showBoard) {
+            touchRankPanel(e, x, y)
+            return true
+        }
+        if (showLib) {
+            touchLibPanel(e, x, y)
+            return true
+        }
         if (showSettings) {
             touchSettings(e, x, y)
             return true
@@ -1581,6 +2131,21 @@ class GameView(context: Context) : View(context) {
         }
 
         if (phase == Phase.READY) {
+            for (k in 0..2) {
+                if (diffChip[k].contains(x, y)) {
+                    if (diff != k) {
+                        diff = k
+                        saveBoardPref("diff", diff)
+                        Diag.line("diff", diffName())
+                        invalidate()
+                    }
+                    return true
+                }
+            }
+            if (btnBoard.contains(x, y)) {
+                openBoard()
+                return true
+            }
             if (btnRect.contains(x, y) && map != null) start(Mode.RHYTHM)
             else if (btnRect2.contains(x, y)) start(Mode.CLASSIC)
             return true
@@ -1719,6 +2284,9 @@ class GameView(context: Context) : View(context) {
         mode = m0
         Diag.clearRun()
         Diag.run("mode", if (m0 == Mode.RHYTHM) "rhythm" else "classic")
+        Diag.run("uid", uid)
+        Diag.run("diff", diffName())
+        overNote = ""
         score = 0
         combo = 0
         maxCombo = 0
@@ -1788,6 +2356,17 @@ class GameView(context: Context) : View(context) {
                 sp2.edit().putInt("bestC", bestClassic).apply()
             }
         }
+        overNote = ""
+        if (score > 0) {
+            val m2 = if (mode == Mode.RHYTHM) "rhythm" else "classic"
+            Diag.run("cloud", "submit")
+            Cloud.submit(m2, uid, nick, score, diffKey()) { ok, rank ->
+                overNote = if (ok) "云端：第 " + rank + " 名 · " + nick else "连不上云端，稍后再试"
+                Diag.run("cloud", if (ok) "ok" + rank else "fail")
+                Diag.line("cloud", if (ok) "over ok rank=" + rank else "over fail")
+                invalidate()
+            }
+        }
         diagDump("over")
         postInvalidateOnAnimation()
     }
@@ -1811,6 +2390,9 @@ class GameView(context: Context) : View(context) {
         Diag.run("vib", if (audio.vibOn) 1 else 0)
         Diag.run("music", if (audio.musicOn) 1 else 0)
         Diag.run("mapErr", if (mapErr.isEmpty()) "-" else mapErr)
+        Diag.run("uid", uid)
+        Diag.run("diff", diffName())
+        Diag.run("nick", nick)
         Diag.publish(tag)
     }
 
@@ -1892,6 +2474,16 @@ class GameView(context: Context) : View(context) {
 
     /** 返回键：设置 → 暂停中继续 → 对局中弹暂停 → 结算回主界面；true = 已消费 */
     fun onBackPressed(): Boolean {
+        if (showBoard) {
+            showBoard = false
+            invalidate()
+            return true
+        }
+        if (showLib) {
+            showLib = false
+            invalidate()
+            return true
+        }
         if (showSettings) {
             closeSettings()
             return true
