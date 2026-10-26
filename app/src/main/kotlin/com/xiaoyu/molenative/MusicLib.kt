@@ -49,38 +49,61 @@ object MusicLib {
                 c.connectTimeout = 8000
                 c.readTimeout = 13000
                 c.setRequestProperty("Accept", "application/json")
-                val r = BufferedReader(InputStreamReader(c.inputStream, "UTF-8"))
-                val sb = StringBuilder()
-                var line = r.readLine()
-                while (line != null) {
-                    sb.append(line)
-                    line = r.readLine()
-                }
-                r.close()
-                val j = JSONObject(sb.toString())
-                val out = ArrayList<Track>()
-                val arr = j.optJSONArray("results")
-                if (arr != null) {
-                    for (i in 0 until arr.length()) {
-                        val o = arr.getJSONObject(i)
-                        val au = o.optString("audio", "")
-                        if (au.isEmpty() || !au.startsWith("http")) continue
-                        out.add(
-                            Track(
-                                o.optString("id", i.toString()),
-                                o.optString("name", "无题"),
-                                o.optString("artist_name", "未知作者"),
-                                o.optInt("duration", 0),
-                                au,
-                                o.optString("license_ccurl", "")
-                            )
-                        )
+                c.setRequestProperty("User-Agent", "mole-native/3.7")
+                val code = c.responseCode
+                if (code !in 200..299) {
+                    err = "曲库返回 HTTP " + code
+                    Diag.line("music", "search http " + code)
+                } else {
+                    val r = BufferedReader(InputStreamReader(c.inputStream, "UTF-8"))
+                    val sb = StringBuilder()
+                    var line = r.readLine()
+                    while (line != null) {
+                        sb.append(line)
+                        line = r.readLine()
+                    }
+                    r.close()
+                    val txt = sb.toString()
+                    var j: JSONObject? = null
+                    try {
+                        j = JSONObject(txt)
+                    } catch (e: Throwable) {
+                        err = "曲库数据异常（非 JSON）"
+                        Diag.line("music", "search badjson " + txt.take(60))
+                    }
+                    if (j != null) {
+                        val head = j.optJSONObject("headers")
+                        if (head != null && head.optString("status") != "success") {
+                            err = "曲库拒绝：" + head.optString("error_message", "?").take(40)
+                            Diag.line("music", "search api " + head.optString("error_message", "?").take(60))
+                        } else {
+                            val out = ArrayList<Track>()
+                            val arr = j.optJSONArray("results")
+                            if (arr != null) {
+                                for (i in 0 until arr.length()) {
+                                    val o = arr.getJSONObject(i)
+                                    val au = o.optString("audio", "")
+                                    if (au.isEmpty() || !au.startsWith("http")) continue
+                                    out.add(
+                                        Track(
+                                            o.optString("id", i.toString()),
+                                            o.optString("name", "无题"),
+                                            o.optString("artist_name", "未知作者"),
+                                            o.optInt("duration", 0),
+                                            au,
+                                            o.optString("license_ccurl", "")
+                                        )
+                                    )
+                                }
+                            }
+                            if (out.isEmpty()) err = "没搜到，换个词试试" else list = out
+                            Diag.line("music", "search(" + q.take(20) + ") got " + out.size)
+                        }
                     }
                 }
-                if (out.isEmpty()) err = "没搜到，换个词试试" else list = out
             } catch (t: Throwable) {
-                err = "连不上曲库，检查网络后重试"
-                Diag.line("music", "search " + (t.message ?: t.toString()).take(60))
+                err = "连不上曲库：" + t.javaClass.simpleName
+                Diag.line("music", "search exc " + (t.message ?: t.toString()).take(60))
             } finally {
                 try {
                     c?.disconnect()

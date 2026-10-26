@@ -721,30 +721,37 @@ class GameView(context: Context) : View(context) {
             canvas.drawRoundRect(tmp, th2 / 2f, th2 / 2f, pFill)
         }
 
-        // 声音设置入口（右上角）
-        val gs = hudH * 0.215f
-        gearR.set(vw - dp(10f) - gs, hudH * 0.05f, vw - dp(10f), hudH * 0.05f + gs)
-        pFill.color = 0x3DFFFFFF
-        canvas.drawRoundRect(gearR, gs * 0.32f, gs * 0.32f, pFill)
-        val gc = 0xD91E4C6E.toInt()
+        // 声音设置入口（右上角）：做成实心白底 + 深色图标 + 文字，避免"看起来点不了"
+        val gs = hudH * 0.30f
+        gearR.set(vw - dp(8f) - gs, hudH * 0.04f, vw - dp(8f), hudH * 0.04f + gs)
+        pFill.color = 0xF2FFFFFF.toInt()
+        canvas.drawRoundRect(gearR, gs * 0.30f, gs * 0.30f, pFill)
+        pStroke.color = 0x331E4C6E
+        pStroke.strokeWidth = max(dp(1.2f), gs * 0.035f)
+        canvas.drawRoundRect(gearR, gs * 0.30f, gs * 0.30f, pStroke)
+        val gc = 0xFF1E4C6E.toInt()
         pStroke.color = gc
-        pStroke.strokeWidth = max(dp(1.8f), gs * 0.075f)
+        pStroke.strokeWidth = max(dp(2f), gs * 0.075f)
         pFill.color = gc
         val gx = gearR.centerX()
-        val gy = gearR.centerY()
-        val lw = gs * 0.40f
-        val step = gs * 0.155f
+        val gy = gearR.centerY() - gs * 0.04f
+        val lw = gs * 0.36f
+        val step = gs * 0.145f
         for (k in -1..1) {
             val ly = gy + step * k
             canvas.drawLine(gx - lw, ly, gx + lw, ly, pStroke)
         }
-        canvas.drawCircle(gx - lw * 0.50f, gy - step, gs * 0.072f, pFill)
-        canvas.drawCircle(gx + lw * 0.30f, gy, gs * 0.072f, pFill)
-        canvas.drawCircle(gx - lw * 0.05f, gy + step, gs * 0.072f, pFill)
+        canvas.drawCircle(gx - lw * 0.50f, gy - step, gs * 0.068f, pFill)
+        canvas.drawCircle(gx + lw * 0.30f, gy, gs * 0.068f, pFill)
+        canvas.drawCircle(gx - lw * 0.05f, gy + step, gs * 0.068f, pFill)
+        pText.textAlign = Paint.Align.CENTER
+        pText.textSize = gs * 0.30f
+        pText.color = gc
+        canvas.drawText("设置", gearR.centerX(), gearR.bottom + gs * 0.34f, pText)
 
         // 暂停键（只有对局中才出现）
         if (phase == Phase.PLAYING) {
-            val ps = hudH * 0.215f
+            val ps = hudH * 0.30f
             val gap = dp(8f)
             pauseBtnR.set(gearR.left - gap - ps, gearR.top, gearR.left - gap, gearR.top + ps)
             pFill.color = 0x3DFFFFFF
@@ -891,6 +898,11 @@ class GameView(context: Context) : View(context) {
         button(canvas, btnMusic, if (audio.musicOn) "音乐 开" else "音乐 关", audio.musicOn, 0.34f)
         button(canvas, btnCloseSet, "完成", true)
 
+        pText.textAlign = Paint.Align.CENTER
+        pText.textSize = ph * 0.019f
+        pText.color = cInkSoft
+        canvas.drawText("“音乐”只管经典模式；主界面和音游一直有音乐", panel.centerX(), panel.top + ph * 0.828f, pText)
+
         // 版权标注：角色原型 + AI 生成说明 + 非商用
         pText.textAlign = Paint.Align.CENTER
         pText.textSize = ph * 0.020f
@@ -952,13 +964,8 @@ class GameView(context: Context) : View(context) {
                     btnMusic.contains(x, y) -> {
                         dragSld = -1
                         audio.musicOn = !audio.musicOn
-                        if (phase == Phase.PLAYING && mode == Mode.RHYTHM) {
-                            // 音游里曲子是游戏本体，不让开关插手
-                        } else if (audio.musicOn && phase != Phase.OVER) {
-                            audio.startBgm()
-                        } else {
-                            audio.pauseBgm()
-                        }
+                        // 只影响经典对局；主界面/音游的音乐策略由 bgmPolicy 决定，不在这里改
+                        if (phase == Phase.PLAYING && mode == Mode.CLASSIC) bgmPolicy()
                     }
                     btnCloseSet.contains(x, y) -> closeSettings()
                     !panel.contains(x, y) -> closeSettings()
@@ -1728,7 +1735,7 @@ class GameView(context: Context) : View(context) {
         }
         if (nowMs >= nextSpawnAt) {
             spawnClassic()
-            val iv = max(360f, 830f - score * 11f) * DIFF_SPAWN[dLevel()]
+            val iv = max(420f, 830f - score * 11f) * DIFF_SPAWN[dLevel()]
             nextSpawnAt = nowMs + iv.toLong() + (Random.nextFloat() * 180f).toLong()
         }
     }
