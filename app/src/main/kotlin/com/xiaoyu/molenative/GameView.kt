@@ -101,8 +101,6 @@ class GameView(context: Context) : View(context) {
         private val DIFF_ALIVE = intArrayOf(2, 3, 4)                 // 经典同屏上限
         private val DIFF_BLUE = floatArrayOf(0.60f, 0.50f, 0.35f)    // 银→蓝 的分界
         private val DIFF_GREEN = floatArrayOf(0.85f, 0.80f, 0.65f)   // 蓝→绿 的分界
-        private val DIFF_WEAK = floatArrayOf(0.62f, 0.25f, 0.10f)    // 弱拍放行阈值（越小越密）
-        private val DIFF_SKIP = floatArrayOf(0.20f, 0.06f, 0.02f)    // 整拍丢弃率
     }
 
     private val sp = resources.displayMetrics.density
@@ -256,6 +254,10 @@ class GameView(context: Context) : View(context) {
     private val libNextR = RectF()
     private val libCloseR = RectF()
     private val libRows = Array(6) { RectF() }
+    private var libTapOk = false
+    private var libDownX = 0f
+    private var libDownY = 0f
+    private var libDownT = 0L
 
     private val bubbles = Array(26) {
         floatArrayOf(
@@ -1076,7 +1078,7 @@ class GameView(context: Context) : View(context) {
     private fun openLib() {
         showLib = true
         libBusy = false
-        if (libTracks.isEmpty()) libStatus = "点上面的搜索框，输入歌名或风格"
+        if (libTracks.isEmpty()) libStatus = "点搜索框，用英文搜：piano / lofi / jazz"
         invalidate()
     }
 
@@ -1085,9 +1087,9 @@ class GameView(context: Context) : View(context) {
         try {
             val et = android.widget.EditText(act)
             et.setText(libQuery)
-            et.setHint("例如：piano / lofi / 电子")
+            et.setHint("只能用英文，例如 piano / lofi / jazz")
             android.app.AlertDialog.Builder(act)
-                .setTitle("搜索免费曲库")
+                .setTitle("搜索免费曲库（英文关键词）")
                 .setView(et)
                 .setPositiveButton("搜索") { _, _ ->
                     val q = et.text.toString().trim()
@@ -1331,7 +1333,7 @@ class GameView(context: Context) : View(context) {
         canvas.drawText("免费曲库", vw * 0.5f, pt + ph * 0.056f, pText)
         pText.textSize = pw * 0.028f
         pText.color = cInkSoft
-        canvas.drawText("Jamendo 曲库 · CC 授权，标注作者即可非商用", vw * 0.5f, pt + ph * 0.090f, pText)
+        canvas.drawText("Jamendo 曲库 · 只能用英文搜 · CC 授权需标注作者", vw * 0.5f, pt + ph * 0.090f, pText)
 
         libSearchR.set(pl + pw * 0.06f, pt + ph * 0.110f, pl + pw * 0.94f, pt + ph * 0.168f)
         pFill.color = 0x141E4C6E
@@ -1392,7 +1394,27 @@ class GameView(context: Context) : View(context) {
     }
 
     private fun touchLibPanel(e: MotionEvent, x: Float, y: Float) {
-        if (e.action != MotionEvent.ACTION_DOWN) return
+        when (e.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                libDownX = x
+                libDownY = y
+                libDownT = System.currentTimeMillis()
+                libTapOk = true
+            }
+            MotionEvent.ACTION_MOVE -> {
+                if (abs(x - libDownX) > dp(18f) || abs(y - libDownY) > dp(18f)) libTapOk = false
+            }
+            MotionEvent.ACTION_UP -> {
+                val quick = System.currentTimeMillis() - libDownT < 700L
+                val still = abs(x - libDownX) <= dp(18f) && abs(y - libDownY) <= dp(18f)
+                if (libTapOk && quick && still) handleLibTap(x, y)
+                libTapOk = false
+            }
+            else -> libTapOk = false
+        }
+    }
+
+    private fun handleLibTap(x: Float, y: Float) {
         if (libSearchR.contains(x, y)) {
             askLibQuery()
             return
@@ -1772,23 +1794,29 @@ class GameView(context: Context) : View(context) {
         var k = 0
         while (k < m.count && m.time(k) + judgeOffset < START_SKIP_MS) k++
         var lastCol = -1
+        // 自适应密度：用全曲拍点能量中位数当门槛。鼓点密的段落每拍都出（听到就一定有怪），
+        // 安静的段落才留空，避免"该响的地方没冒头"和"空拍乱冒"两种问题
+        val lv = dLevel()
+        val eArr = IntArray(m.count) { m.energyAt(it) }
+        val med = if (eArr.isEmpty()) 128 else eArr.sortedArray()[eArr.size / 2]
+        val cut = when (lv) {
+            0 -> 0.55f
+            1 -> 0.26f
+            else -> 0.14f
+        } * med
         while (k < m.count) {
             val e = m.energyAt(k)
-            val lv = dLevel()
-            val strongT = if (lv == 2) 150 else 165
-            val midT = if (lv == 2) 84 else 95
-            val strong = e > strongT
-            val mid = e > midT
-            var place = if (mid) true else (hash(k * 13 + 5) > DIFF_WEAK[lv])
-            if (hash(k) < DIFF_SKIP[lv]) place = false
-            if (!place) {
+            val strong = e > 165
+            val mid = e > 95
+            if (e < cut) {
                 k++
                 continue
             }
             var hits = 1
             val hh = hash(k + 991)
             if (strong) {
-                if (hh > 0.88f) hits = 3 else if (hh > 0.55f) hits = 2
+                if (hh > (if (lv == 2) 0.80f else 0.88f)) hits = 3
+                else if (hh > (if (lv == 2) 0.46f else 0.55f)) hits = 2
             } else if (mid) {
                 if (hh > 0.80f) hits = 2
             } else if (hh > 0.93f) {
@@ -2099,6 +2127,13 @@ class GameView(context: Context) : View(context) {
     override fun onTouchEvent(e: MotionEvent): Boolean {
         val x = e.x
         val y = e.y - insetTop
+
+        // 多指（比如三指下滑截屏）一律不当作游戏操作，避免"截屏顺手选了一首歌"
+        if (e.pointerCount > 1) {
+            libTapOk = false
+            dragSld = -1
+            return true
+        }
 
         if (showBoard) {
             touchRankPanel(e, x, y)

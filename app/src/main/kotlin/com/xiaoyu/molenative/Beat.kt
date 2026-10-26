@@ -57,7 +57,7 @@ class BeatMap(
 object BeatDetector {
 
     private const val HOP = 512
-    private const val CACHE = "beat_v2_"
+    private const val CACHE = "beat_v3_"
     private const val MAX_SECONDS = 330
 
     fun cacheKey(uriStr: String?): String = CACHE + (uriStr ?: "builtin")
@@ -154,6 +154,18 @@ object BeatDetector {
         }
         var phaseMs = bestPhase / fps * 1000.0
         while (phaseMs > periodMs) phaseMs -= periodMs
+
+        // 半拍纠偏：如果错开半拍后的格点能量明显更高，说明拍点落在了反拍上，整体挪半拍
+        var halfScore = 0.0
+        var ht = bestPhase + bestLag / 2
+        while (ht < n) {
+            halfScore += nov[ht]
+            ht += bestLag
+        }
+        if (halfScore > bestPhaseScore * 1.15) {
+            phaseMs += periodMs / 2.0
+            while (phaseMs > periodMs) phaseMs -= periodMs
+        }
 
         val durationMs = (n.toDouble() / fps * 1000.0).toLong()
         val count = ((durationMs - phaseMs) / periodMs).toInt()
